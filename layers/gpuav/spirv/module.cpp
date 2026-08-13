@@ -213,8 +213,10 @@ Module::Module(vvl::span<const uint32_t> words, DebugReport* debug_report, const
         it += length;
     }
 
-    // If multiple entrypoints, need to resolve which is the real push constant for it
-    if (!type_manager_.FindPushConstantVariable() && entry_points_.size() > 1) {
+    // If multiple entrypoints, need to resolve which is the real push constant for it.
+    // Only meaningful when a push constant variable was actually found; modules without any push
+    // constants have nothing to disambiguate and used to warn spuriously here (inverted condition).
+    if (type_manager_.FindPushConstantVariable() && entry_points_.size() > 1) {
         const uint32_t spirv_version_1_4 = 0x00010400;
         if (header_.version < spirv_version_1_4) {
             // will just use the 2nd one found to not blow up
