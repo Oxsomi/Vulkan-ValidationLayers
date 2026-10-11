@@ -90,6 +90,7 @@ void LastBound::Reset() {
         shader_object_states[i] = nullptr;
     }
     desc_set_pipeline_layout.reset();
+    push_constant_pipeline_layout.reset();
     if (push_descriptor_set) {
         cb_state.RemoveChild(push_descriptor_set);
         push_descriptor_set->Destroy();
@@ -626,6 +627,38 @@ uint32_t LastBound::GetViewportSwizzleCount() const {
     return 0;
 }
 
+uint32_t LastBound::GetViewportWScalingCount() const {
+    if (IsDynamic(CB_DYNAMIC_STATE_VIEWPORT_W_SCALING_NV)) {
+        if (cb_state.IsDynamicStateSet(CB_DYNAMIC_STATE_VIEWPORT_W_SCALING_NV)) {
+            return cb_state.dynamic_state_value.viewport_w_scaling_count;
+        }
+    } else {
+        if (auto viewport_state = pipeline_state->ViewportState()) {
+            if (const auto* viewport_w_scaling_state =
+                    vku::FindStructInPNextChain<VkPipelineViewportWScalingStateCreateInfoNV>(viewport_state->pNext)) {
+                return viewport_w_scaling_state->viewportCount;
+            }
+        }
+    }
+    return 0;
+}
+
+uint32_t LastBound::GetShadingRatePaletteCount() const {
+    if (IsDynamic(CB_DYNAMIC_STATE_VIEWPORT_SHADING_RATE_PALETTE_NV)) {
+        if (cb_state.IsDynamicStateSet(CB_DYNAMIC_STATE_VIEWPORT_SHADING_RATE_PALETTE_NV)) {
+            return cb_state.dynamic_state_value.shading_rate_palette_count;
+        }
+    } else {
+        if (auto viewport_state = pipeline_state->ViewportState()) {
+            if (const auto* shading_rate_image_state =
+                    vku::FindStructInPNextChain<VkPipelineViewportShadingRateImageStateCreateInfoNV>(viewport_state->pNext)) {
+                return shading_rate_image_state->viewportCount;
+            }
+        }
+    }
+    return 0;
+}
+
 VkPolygonMode LastBound::GetPolygonMode() const {
     if (IsDynamic(CB_DYNAMIC_STATE_POLYGON_MODE_EXT)) {
         if (cb_state.IsDynamicStateSet(CB_DYNAMIC_STATE_POLYGON_MODE_EXT)) {
@@ -1033,6 +1066,17 @@ const spirv::EntryPoint* LastBound::GetFragmentEntryPoint() const {
     return nullptr;
 }
 
+const spirv::Module* LastBound::GetFragmentSpirvModule() const {
+    if (pipeline_state && pipeline_state->fragment_shader_state) {
+        if (const auto& fragment_shader = pipeline_state->fragment_shader_state->fragment_shader) {
+            return fragment_shader->spirv.get();
+        }
+    } else if (const auto* shader_object = GetShaderObjectState(ShaderObjectStage::FRAGMENT)) {
+        return shader_object->stage.spirv_state.get();
+    }
+    return nullptr;
+}
+
 vvl::DescriptorMode LastBound::GetActionDescriptorMode() const {
     if (descriptor_mode != vvl::DescriptorModeUnknown) {
         return descriptor_mode;  // Most common case
@@ -1055,6 +1099,12 @@ vvl::DescriptorMode LastBound::GetActionDescriptorMode() const {
         }
         if (desc_set_pipeline_layout) {
             if (desc_set_pipeline_layout->has_descriptor_buffer) {
+                return vvl::DescriptorModeBuffer;
+            } else {
+                return vvl::DescriptorModeClassic;
+            }
+        } else if (push_constant_pipeline_layout) {
+            if (push_constant_pipeline_layout->has_descriptor_buffer) {
                 return vvl::DescriptorModeBuffer;
             } else {
                 return vvl::DescriptorModeClassic;

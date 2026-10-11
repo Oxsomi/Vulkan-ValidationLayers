@@ -31,7 +31,7 @@ namespace vvl {
 
 const char* String(Func func) {
     static const std::string_view table[] = {
-    {"INVALID_EMPTY", 15}, // Func::Empty
+    {"INVALID_EMPTY", 14}, // Func::Empty
     {"vkAcquireDrmDisplayEXT", 23},
     {"vkAcquireFullScreenExclusiveModeEXT", 36},
     {"vkAcquireNextImage2KHR", 23},
@@ -669,6 +669,7 @@ const char* String(Func func) {
     {"vkGetPhysicalDeviceCalibrateableTimeDomainsEXT", 47},
     {"vkGetPhysicalDeviceCalibrateableTimeDomainsKHR", 47},
     {"vkGetPhysicalDeviceCooperativeMatrixFlexibleDimensionsPropertiesNV", 67},
+    {"vkGetPhysicalDeviceCooperativeMatrixProperties2EXT", 51},
     {"vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR", 50},
     {"vkGetPhysicalDeviceCooperativeMatrixPropertiesNV", 49},
     {"vkGetPhysicalDeviceCooperativeVectorPropertiesNV", 49},
@@ -879,7 +880,7 @@ const char* String(Func func) {
 
 const char* String(Struct structure) {
     static const std::string_view table[] = {
-    {"INVALID_EMPTY", 15}, // Struct::Empty
+    {"INVALID_EMPTY", 14}, // Struct::Empty
     {"VkAabbPositionsKHR", 19},
     {"VkAccelerationStructureBuildGeometryInfoKHR", 44},
     {"VkAccelerationStructureBuildRangeInfoKHR", 41},
@@ -972,6 +973,7 @@ const char* String(Struct structure) {
     {"VkBufferCopy", 13},
     {"VkBufferCopy2", 14},
     {"VkBufferCreateInfo", 19},
+    {"VkBufferDeviceAddressAlignmentAllocateInfoVALVE", 48},
     {"VkBufferDeviceAddressCreateInfoEXT", 35},
     {"VkBufferDeviceAddressInfo", 26},
     {"VkBufferImageCopy", 18},
@@ -1028,6 +1030,7 @@ const char* String(Struct structure) {
     {"VkConformanceVersion", 21},
     {"VkConvertCooperativeVectorMatrixInfoNV", 39},
     {"VkCooperativeMatrixFlexibleDimensionsPropertiesNV", 50},
+    {"VkCooperativeMatrixProperties2EXT", 34},
     {"VkCooperativeMatrixPropertiesKHR", 33},
     {"VkCooperativeMatrixPropertiesNV", 32},
     {"VkCooperativeVectorPropertiesNV", 32},
@@ -1334,6 +1337,7 @@ const char* String(Struct structure) {
     {"VkImageSubresourceLayers", 25},
     {"VkImageSubresourceRange", 24},
     {"VkImageSwapchainCreateInfoKHR", 30},
+    {"VkImageTilingControlCreateInfoEXT", 34},
     {"VkImageToMemoryCopy", 20},
     {"VkImageUsageFlags2CreateInfoKHR", 32},
     {"VkImageViewASTCDecodeModeEXT", 29},
@@ -1494,6 +1498,8 @@ const char* String(Struct structure) {
     {"VkPhysicalDeviceBlendOperationAdvancedFeaturesEXT", 50},
     {"VkPhysicalDeviceBlendOperationAdvancedPropertiesEXT", 52},
     {"VkPhysicalDeviceBorderColorSwizzleFeaturesEXT", 46},
+    {"VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE", 68},
+    {"VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE", 70},
     {"VkPhysicalDeviceBufferDeviceAddressFeatures", 44},
     {"VkPhysicalDeviceBufferDeviceAddressFeaturesEXT", 47},
     {"VkPhysicalDeviceClusterAccelerationStructureFeaturesNV", 55},
@@ -1515,6 +1521,9 @@ const char* String(Struct structure) {
     {"VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV", 56},
     {"VkPhysicalDeviceCooperativeMatrixFeaturesKHR", 45},
     {"VkPhysicalDeviceCooperativeMatrixFeaturesNV", 44},
+    {"VkPhysicalDeviceCooperativeMatrixInfo2EXT", 42},
+    {"VkPhysicalDeviceCooperativeMatrixLayoutsFeaturesARM", 52},
+    {"VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT", 57},
     {"VkPhysicalDeviceCooperativeMatrixPropertiesKHR", 47},
     {"VkPhysicalDeviceCooperativeMatrixPropertiesNV", 46},
     {"VkPhysicalDeviceCooperativeVectorFeaturesNV", 44},
@@ -1643,10 +1652,12 @@ const char* String(Struct structure) {
     {"VkPhysicalDeviceImageProcessingPropertiesQCOM", 46},
     {"VkPhysicalDeviceImageRobustnessFeatures", 40},
     {"VkPhysicalDeviceImageSlicedViewOf3DFeaturesEXT", 47},
+    {"VkPhysicalDeviceImageTilingControlFeaturesEXT", 46},
     {"VkPhysicalDeviceImageViewImageFormatInfoEXT", 44},
     {"VkPhysicalDeviceImageViewMinLodFeaturesEXT", 43},
     {"VkPhysicalDeviceImagelessFramebufferFeatures", 45},
     {"VkPhysicalDeviceIndexTypeUint8Features", 39},
+    {"VkPhysicalDeviceInfoPropertiesINTEL", 36},
     {"VkPhysicalDeviceInheritedViewportScissorFeaturesNV", 51},
     {"VkPhysicalDeviceInlineUniformBlockFeatures", 43},
     {"VkPhysicalDeviceInlineUniformBlockProperties", 45},
@@ -1723,7 +1734,7 @@ const char* String(Struct structure) {
     {"VkPhysicalDevicePipelineCacheIncrementalModeFeaturesSEC", 56},
     {"VkPhysicalDevicePipelineCreationCacheControlFeatures", 53},
     {"VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR", 56},
-    {"VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT", 55},
+    {"VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR", 55},
     {"VkPhysicalDevicePipelineOpacityMicromapFeaturesARM", 51},
     {"VkPhysicalDevicePipelinePropertiesFeaturesEXT", 46},
     {"VkPhysicalDevicePipelineProtectedAccessFeatures", 48},
@@ -1743,6 +1754,7 @@ const char* String(Struct structure) {
     {"VkPhysicalDevicePrimitiveRestartIndexFeaturesEXT", 49},
     {"VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT", 56},
     {"VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT", 52},
+    {"VkPhysicalDevicePrivateDataBaseHandleFeaturesNV", 48},
     {"VkPhysicalDevicePrivateDataFeatures", 36},
     {"VkPhysicalDeviceProperties", 27},
     {"VkPhysicalDeviceProperties2", 28},
@@ -2478,6 +2490,7 @@ const char* String(Field field) {
     {"bufferDescriptorAlignment", 26},
     {"bufferDescriptorSize", 21},
     {"bufferDeviceAddress", 20},
+    {"bufferDeviceAddressAllocationAlignment", 39},
     {"bufferDeviceAddressCaptureReplay", 33},
     {"bufferDeviceAddressMultiDevice", 31},
     {"bufferFeatures", 15},
@@ -2603,13 +2616,16 @@ const char* String(Field field) {
     {"context", 8},
     {"conversion", 11},
     {"cooperativeMatrix", 18},
+    {"cooperativeMatrixArmLayouts", 28},
     {"cooperativeMatrixBlockLoads", 28},
     {"cooperativeMatrixConversion", 28},
     {"cooperativeMatrixConversions", 29},
     {"cooperativeMatrixDecodeVector", 30},
     {"cooperativeMatrixFlexibleDimensions", 36},
     {"cooperativeMatrixFlexibleDimensionsMaxDimension", 48},
+    {"cooperativeMatrixGetCoordinate", 31},
     {"cooperativeMatrixPerElementOperations", 38},
+    {"cooperativeMatrixProperties2", 29},
     {"cooperativeMatrixReductions", 28},
     {"cooperativeMatrixRobustBufferAccess", 36},
     {"cooperativeMatrixSupportedStages", 33},
@@ -2789,6 +2805,9 @@ const char* String(Field field) {
     {"deviceID", 9},
     {"deviceIndex", 12},
     {"deviceIndexCount", 17},
+    {"deviceIpVersionArch", 20},
+    {"deviceIpVersionRelease", 23},
+    {"deviceIpVersionRevision", 24},
     {"deviceLUID", 11},
     {"deviceLUIDValid", 16},
     {"deviceMask", 11},
@@ -3226,6 +3245,7 @@ const char* String(Field field) {
     {"imageSlicedViewOf3D", 20},
     {"imageSubresource", 17},
     {"imageTiling", 12},
+    {"imageTilingControl", 19},
     {"imageType", 10},
     {"imageUsage", 11},
     {"imageUsageFlags", 16},
@@ -3346,6 +3366,7 @@ const char* String(Field field) {
     {"intraRefreshMode", 17},
     {"intraRefreshModes", 18},
     {"invocationMask", 15},
+    {"invocations", 12},
     {"ioSurface", 10},
     {"isForeign", 10},
     {"isPreprocessed", 15},
@@ -3426,6 +3447,7 @@ const char* String(Field field) {
     {"maxBoundDescriptorSets", 23},
     {"maxBoxFilterBlockSize", 22},
     {"maxBufferCount", 15},
+    {"maxBufferDeviceAddressAllocationAlignment", 42},
     {"maxBufferSize", 14},
     {"maxClipDistances", 17},
     {"maxClusterCountPerAccelerationStructure", 40},
@@ -4056,6 +4078,7 @@ const char* String(Field field) {
     {"pConnections", 13},
     {"pConstantData", 14},
     {"pConstants", 11},
+    {"pCooperativeMatrixInfo", 23},
     {"pCopyBufferInfo", 16},
     {"pCopyBufferToImageInfo", 23},
     {"pCopyDstLayouts", 16},
@@ -4794,6 +4817,7 @@ const char* String(Field field) {
     {"priority", 9},
     {"priorityCount", 14},
     {"privateData", 12},
+    {"privateDataBaseHandle", 22},
     {"privateDataSlot", 16},
     {"privateDataSlotRequestCount", 28},
     {"processingEngineCount", 22},
@@ -5518,6 +5542,7 @@ const char* String(Field field) {
     {"tileSize", 9},
     {"tilesOffset", 12},
     {"tiling", 7},
+    {"tilingControl", 14},
     {"time", 5},
     {"timeDomain", 11},
     {"timeDomainCount", 16},
@@ -5720,7 +5745,7 @@ const char* String(Field field) {
 
 const char* String(Enum value) {
     static const std::string_view table[] = {
-    {"INVALID_EMPTY", 15}, // Enum::Empty
+    {"INVALID_EMPTY", 14}, // Enum::Empty
     {"VkAccelerationStructureBuildTypeKHR", 36},
     {"VkAccelerationStructureCompatibilityKHR", 40},
     {"VkAccelerationStructureMemoryRequirementsTypeNV", 48},
@@ -5797,6 +5822,7 @@ const char* String(Enum value) {
     {"VkGpaSampleTypeAMD", 19},
     {"VkImageLayout", 14},
     {"VkImageTiling", 14},
+    {"VkImageTilingControlEXT", 24},
     {"VkImageType", 12},
     {"VkImageViewType", 16},
     {"VkIndexType", 12},
@@ -5889,7 +5915,7 @@ const char* String(Enum value) {
 
 const char* String(FlagBitmask value) {
     static const std::string_view table[] = {
-    {"INVALID_EMPTY", 15}, // FlagBitmask::Empty
+    {"INVALID_EMPTY", 14}, // FlagBitmask::Empty
     {"VkAccelerationStructureCreateFlagBitsKHR", 41},
     {"VkAccessFlagBits", 17},
     {"VkAccessFlagBits2", 18},
@@ -5914,6 +5940,7 @@ const char* String(FlagBitmask value) {
     {"VkCommandPoolResetFlagBits", 27},
     {"VkCompositeAlphaFlagBitsKHR", 28},
     {"VkConditionalRenderingFlagBitsEXT", 34},
+    {"VkCooperativeMatrixFlagBitsEXT", 31},
     {"VkCullModeFlagBits", 19},
     {"VkDataGraphOpticalFlowCreateFlagBitsARM", 40},
     {"VkDataGraphOpticalFlowExecuteFlagBitsARM", 41},
@@ -6002,6 +6029,7 @@ const char* String(FlagBitmask value) {
     {"VkPresentScalingFlagBitsKHR", 28},
     {"VkPresentStageFlagBitsEXT", 26},
     {"VkPresentTimingInfoFlagBitsEXT", 31},
+    {"VkPrivateDataSlotCreateFlagBits", 32},
     {"VkQueryControlFlagBits", 23},
     {"VkQueryPipelineStatisticFlagBits", 33},
     {"VkQueryPoolCreateFlagBits", 26},
@@ -6073,7 +6101,7 @@ const char* String(FlagBitmask value) {
 
 const char* String(Extension extension) {
     static const std::string_view table[] = {
-    {"INVALID_EMPTY", 15}, // Extension::Empty
+    {"INVALID_EMPTY", 14}, // Extension::Empty
     {"VK_AMDX_dense_geometry_format", 30},
     {"VK_AMDX_shader_enqueue", 23},
     {"VK_AMD_anti_lag", 16},
@@ -6102,6 +6130,7 @@ const char* String(Extension extension) {
     {"VK_AMD_texture_gather_bias_lod", 31},
     {"VK_ANDROID_external_format_resolve", 35},
     {"VK_ANDROID_external_memory_android_hardware_buffer", 51},
+    {"VK_ARM_cooperative_matrix_layouts", 34},
     {"VK_ARM_data_graph", 18},
     {"VK_ARM_data_graph_instruction_set_tosa", 39},
     {"VK_ARM_data_graph_neural_accelerator_statistics", 48},
@@ -6130,6 +6159,7 @@ const char* String(Extension extension) {
     {"VK_EXT_color_write_enable", 26},
     {"VK_EXT_conditional_rendering", 29},
     {"VK_EXT_conservative_rasterization", 34},
+    {"VK_EXT_cooperative_matrix_maintenance1", 39},
     {"VK_EXT_custom_border_color", 27},
     {"VK_EXT_custom_resolve", 22},
     {"VK_EXT_debug_marker", 20},
@@ -6181,6 +6211,7 @@ const char* String(Extension extension) {
     {"VK_EXT_image_drm_format_modifier", 33},
     {"VK_EXT_image_robustness", 24},
     {"VK_EXT_image_sliced_view_of_3d", 31},
+    {"VK_EXT_image_tiling_control", 28},
     {"VK_EXT_image_view_min_lod", 26},
     {"VK_EXT_index_type_uint8", 24},
     {"VK_EXT_inline_uniform_block", 28},
@@ -6286,6 +6317,7 @@ const char* String(Extension extension) {
     {"VK_IMG_filter_linear_2d", 24},
     {"VK_IMG_format_pvrtc", 20},
     {"VK_IMG_relaxed_line_rasterization", 34},
+    {"VK_INTEL_device_info", 21},
     {"VK_INTEL_performance_query", 27},
     {"VK_INTEL_shader_integer_functions2", 35},
     {"VK_KHR_16bit_storage", 21},
@@ -6361,6 +6393,7 @@ const char* String(Extension extension) {
     {"VK_KHR_pipeline_binary", 23},
     {"VK_KHR_pipeline_executable_properties", 38},
     {"VK_KHR_pipeline_library", 24},
+    {"VK_KHR_pipeline_library_group_handles", 38},
     {"VK_KHR_portability_enumeration", 31},
     {"VK_KHR_portability_subset", 26},
     {"VK_KHR_present_id", 18},
@@ -6493,6 +6526,7 @@ const char* String(Extension extension) {
     {"VK_NV_per_stage_descriptor_set", 31},
     {"VK_NV_present_barrier", 22},
     {"VK_NV_present_metering", 23},
+    {"VK_NV_private_data_base_handle", 31},
     {"VK_NV_push_constant_bank", 25},
     {"VK_NV_raw_access_chains", 24},
     {"VK_NV_ray_tracing", 18},
@@ -6540,6 +6574,7 @@ const char* String(Extension extension) {
     {"VK_SEC_pipeline_cache_incremental_mode", 39},
     {"VK_SEC_throttle_hint", 21},
     {"VK_SEC_ubm_surface", 19},
+    {"VK_VALVE_buffer_device_address_allocation_alignment", 52},
     {"VK_VALVE_descriptor_set_host_mapping", 37},
     {"VK_VALVE_fragment_density_map_layered", 38},
     {"VK_VALVE_mutable_descriptor_type", 33},
@@ -6649,6 +6684,7 @@ bool IsFieldPointer(Field field) {
     case Field::pConnections:
     case Field::pConstantData:
     case Field::pConstants:
+    case Field::pCooperativeMatrixInfo:
     case Field::pCopyBufferInfo:
     case Field::pCopyBufferToImageInfo:
     case Field::pCopyDstLayouts:
@@ -8303,6 +8339,8 @@ Struct StypeToStruct(VkStructureType stype) {
        return Struct::VkRenderingAttachmentFlagsInfoKHR;
     case VK_STRUCTURE_TYPE_RESOLVE_IMAGE_MODE_INFO_KHR:
        return Struct::VkResolveImageModeInfoKHR;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_KHR:
+       return Struct::VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_11_FEATURES_KHR:
        return Struct::VkPhysicalDeviceMaintenance11FeaturesKHR;
     case VK_STRUCTURE_TYPE_QUEUE_FAMILY_OPTIMAL_IMAGE_TRANSFER_GRANULARITY_PROPERTIES_KHR:
@@ -9311,8 +9349,6 @@ Struct StypeToStruct(VkStructureType stype) {
        return Struct::VkPhysicalDeviceShaderCoreBuiltinsFeaturesARM;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_BUILTINS_PROPERTIES_ARM:
        return Struct::VkPhysicalDeviceShaderCoreBuiltinsPropertiesARM;
-    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT:
-       return Struct::VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT:
        return Struct::VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT;
     case VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV:
@@ -9633,10 +9669,18 @@ Struct StypeToStruct(VkStructureType stype) {
        return Struct::VkComputeOccupancyPriorityParametersNV;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_OCCUPANCY_PRIORITY_FEATURES_NV:
        return Struct::VkPhysicalDeviceComputeOccupancyPriorityFeaturesNV;
+    case VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_2_EXT:
+       return Struct::VkCooperativeMatrixProperties2EXT;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_INFO_2_EXT:
+       return Struct::VkPhysicalDeviceCooperativeMatrixInfo2EXT;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT:
+       return Struct::VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_PARTITIONED_FEATURES_EXT:
        return Struct::VkPhysicalDeviceShaderSubgroupPartitionedFeaturesEXT;
     case VK_STRUCTURE_TYPE_UBM_SURFACE_CREATE_INFO_SEC:
        return Struct::VkUbmSurfaceCreateInfoSEC;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_LAYOUTS_FEATURES_ARM:
+       return Struct::VkPhysicalDeviceCooperativeMatrixLayoutsFeaturesARM;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OCP_MICROSCALING_TYPES_FEATURES_EXT:
        return Struct::VkPhysicalDeviceShaderOCPMicroscalingTypesFeaturesEXT;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE:
@@ -9653,8 +9697,22 @@ Struct StypeToStruct(VkStructureType stype) {
        return Struct::VkDataGraphPipelineSessionNeuralStatisticsCreateInfoARM;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_RESTART_INDEX_FEATURES_EXT:
        return Struct::VkPhysicalDevicePrimitiveRestartIndexFeaturesEXT;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_TILING_CONTROL_FEATURES_EXT:
+       return Struct::VkPhysicalDeviceImageTilingControlFeaturesEXT;
+    case VK_STRUCTURE_TYPE_IMAGE_TILING_CONTROL_CREATE_INFO_EXT:
+       return Struct::VkImageTilingControlCreateInfoEXT;
     case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_DECODE_VECTOR_FEATURES_NV:
        return Struct::VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_BASE_HANDLE_FEATURES_NV:
+       return Struct::VkPhysicalDevicePrivateDataBaseHandleFeaturesNV;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INFO_PROPERTIES_INTEL:
+       return Struct::VkPhysicalDeviceInfoPropertiesINTEL;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_FEATURES_VALVE:
+       return Struct::VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE;
+    case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_PROPERTIES_VALVE:
+       return Struct::VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE;
+    case VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_ALIGNMENT_ALLOCATE_INFO_VALVE:
+       return Struct::VkBufferDeviceAddressAlignmentAllocateInfoVALVE;
     case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR:
        return Struct::VkAccelerationStructureGeometryTrianglesDataKHR;
     case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR:

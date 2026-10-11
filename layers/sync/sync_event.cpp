@@ -16,11 +16,13 @@
  */
 
 #include "sync_event.h"
-#include "sync_access_context.h"
 #include "sync_image.h"
+#include "sync_reporting.h"
 #include "sync_validation.h"
 #include "state_tracker/buffer_state.h"
+#include "state_tracker/event_state.h"
 #include "utils/image_utils.h"
+#include "utils/text_utils.h"
 
 namespace syncval {
 
@@ -176,7 +178,7 @@ class FilteredGeneratorGenerator {
     AccessRange current_;
 };
 
-using EventImageRangeGenerator = FilteredGeneratorGenerator<subresource_adapter::ImageRangeGenerator>;
+using EventImageRangeGenerator = FilteredGeneratorGenerator<ImageRangeGenerator>;
 
 // Need to restrict to only valid exec and access scope for this event
 static SyncBarrier RestrictToEvent(const SyncBarrier& barrier, const SyncEventState& sync_event) {
@@ -186,15 +188,219 @@ static SyncBarrier RestrictToEvent(const SyncBarrier& barrier, const SyncEventSt
     return result;
 }
 
-void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<std::shared_ptr<const vvl::Event>>& events,
-                     vvl::span<const BarrierSet> barrier_sets, ResourceUsageTag tag, vvl::Func command) {
+SyncEventState& SyncEventsContext::GetOrCreate(const vvl::Event& event) {
+    const auto find_it = map_.find(&event);
+    if (find_it != map_.end()) {
+        return *find_it->second;
+    }
+    auto event_state = std::static_pointer_cast<const vvl::Event>(event.shared_from_this());
+    auto sync_state = std::make_shared<SyncEventState>(event_state);
+    return *map_.emplace(&event, std::move(sync_state)).first->second;
+}
+
+void SyncEventsContext::ApplyBarrier(const SyncExecScope& src, const SyncExecScope& dst, ResourceUsageTag tag) {
+    const bool all_commands_bit = 0 != (src.stage_mask & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+    for (auto& event_pair : map_) {
+        assert(event_pair.second);  // Shouldn't be storing empty
+        auto& sync_event = *event_pair.second;
+        // Events don't happen at a stage, so we need to check and store the unexpanded ALL_COMMANDS if set for inter-event-calls
+        // But only if occuring before the tag
+        if (((sync_event.barriers & src.exec_scope) || all_commands_bit) && (sync_event.last_command_tag <= tag)) {
+            sync_event.barriers |= dst.exec_scope;
+            sync_event.barriers |= dst.stage_mask & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        }
+    }
+}
+
+void SyncEventsContext::ApplyTaggedWait(VkQueueFlags queue_flags, ResourceUsageTag tag) {
+    const SyncExecScope src_scope =
+        SyncExecScope::MakeSrc(queue_flags, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_HOST_BIT);
+    const SyncExecScope dst_scope = SyncExecScope::MakeDst(queue_flags, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    ApplyBarrier(src_scope, dst_scope, tag);
+}
+
+SyncEventsContext& SyncEventsContext::DeepCopy(const SyncEventsContext& from) {
+    // We need a deep copy of the const context to update during validation phase
+    for (const auto& event : from.map_) {
+        map_.emplace(event.first, std::make_shared<SyncEventState>(*event.second));
+    }
+    return *this;
+}
+
+void SyncEventsContext::AddReferencedTags(ResourceUsageTagSet& referenced) const {
+    for (const auto& event : map_) {
+        const std::shared_ptr<const SyncEventState>& event_state = event.second;
+        if (event_state) {
+            event_state->AddReferencedTags(referenced);
+        }
+    }
+}
+
+SyncEventState::SyncEventState(const SyncEventState::EventPointer& event_state) : SyncEventState() { event = event_state; }
+
+void SyncEventState::ResetFirstScope() {
+    first_scope.reset();
+    scope = SyncExecScope();
+    first_scope_tag = 0;
+}
+
+bool SyncEventState::HasBarrier(VkPipelineStageFlags2 stageMask, VkPipelineStageFlags2 exec_scope_arg) const {
+    return (last_command == vvl::Func::Empty) || (stageMask & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT) || (barriers & exec_scope_arg) ||
+           (barriers & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+}
+
+void SyncEventState::AddReferencedTags(ResourceUsageTagSet& referenced) const {
+    if (first_scope) {
+        first_scope->AddReferencedTags(referenced);
+    }
+}
+
+bool ValidateCmdSetEvent(const SyncEnvironment& env, const vvl::Event& event, const SyncExecScope& src_exec_scope,
+                         const ErrorReporter& reporter, const Location& loc) {
+    bool skip = false;
+    const SyncEventState* sync_event = env.events_context.Get(event);
+    if (!sync_event) {
+        return skip;
+    }
+    if (!sync_event->HasBarrier(src_exec_scope.stage_mask, src_exec_scope.exec_scope)) {
+        const std::string vuid_prefix = std::string("SYNC-") + vvl::String(loc.function);
+        if (IsValueIn(sync_event->last_command,
+                      {vvl::Func::vkCmdResetEvent, vvl::Func::vkCmdResetEvent2, vvl::Func::vkCmdResetEvent2KHR})) {
+            skip |= reporter.ReportEventError(
+                *sync_event, (vuid_prefix + "-reset-race").c_str(), event.Handle(), loc,
+                text::Format("%s is set after %s without an intervening execution dependency. This is a race condition "
+                             "and may result in data hazards.",
+                             env.validator.FormatHandle(event.Handle()).c_str(), vvl::String(sync_event->last_command)));
+        } else if (IsValueIn(sync_event->last_command,
+                             {vvl::Func::vkCmdSetEvent, vvl::Func::vkCmdSetEvent2, vvl::Func::vkCmdSetEvent2KHR})) {
+            skip |= reporter.ReportEventError(
+                *sync_event, (vuid_prefix + "-set-race").c_str(), event.Handle(), loc,
+                text::Format("%s is set after a previous %s without an intervening execution dependency. This is a race "
+                             "condition and may result in data hazards.",
+                             env.validator.FormatHandle(event.Handle()).c_str(), vvl::String(sync_event->last_command)));
+        } else if (IsValueIn(sync_event->last_command,
+                             {vvl::Func::vkCmdWaitEvents, vvl::Func::vkCmdWaitEvents2, vvl::Func::vkCmdWaitEvents2KHR})) {
+            skip |= reporter.ReportEventError(
+                *sync_event, (vuid_prefix + "-wait").c_str(), event.Handle(), loc,
+                text::Format("%s is set after %s without intervening vkCmdResetEvent, may result in data hazard.",
+                             env.validator.FormatHandle(event.Handle()).c_str(), vvl::String(sync_event->last_command)));
+        }
+    }
+    return skip;
+}
+
+bool ValidateCmdResetEvent(const SyncEnvironment& env, const vvl::Event& event, const SyncExecScope& exec_scope,
+                           const ErrorReporter& reporter, const Location& loc) {
+    bool skip = false;
+    const SyncEventState* sync_event = env.events_context.Get(event);
+    if (!sync_event) {
+        return skip;
+    }
+    if (IsValueIn(sync_event->last_command, {vvl::Func::vkCmdSetEvent, vvl::Func::vkCmdSetEvent2, vvl::Func::vkCmdSetEvent2KHR}) &&
+        !sync_event->HasBarrier(exec_scope.stage_mask, exec_scope.exec_scope)) {
+        skip |= reporter.ReportEventError(
+            *sync_event, "SYNC-vkCmdResetEvent-set-race", event.Handle(), loc,
+            text::Format("%s is reset after %s without an intervening execution dependency. This is a race condition "
+                         "and may result in data hazards.",
+                         env.validator.FormatHandle(event.Handle()).c_str(), vvl::String(sync_event->last_command)));
+    }
+    return skip;
+}
+
+bool ValidateCmdWaitEvents(const SyncEnvironment& env, vvl::span<const std::shared_ptr<const vvl::Event>> events,
+                           const ErrorReporter& reporter, const Location& loc) {
+    bool skip = false;
+    for (const auto& event : events) {
+        const SyncEventState* sync_event = env.events_context.Get(event);
+        if (!sync_event || !sync_event->first_scope) {
+            continue;  // [core validation check]: invalid event
+        }
+        if (sync_event->unsynchronized_set != vvl::Func::Empty) {
+            skip |= reporter.ReportEventError(*sync_event, "SYNC-vkCmdWaitEvents-unsynchronized-setops",
+                                              sync_event->event->VkHandle(), loc,
+                                              text::Format("does not create an execution dependency with the previous %s for %s.",
+                                                           vvl::String(sync_event->last_command),
+                                                           env.validator.FormatHandle(sync_event->event->Handle()).c_str()));
+        }
+    }
+    return skip;
+}
+
+bool DetectCmdWaitEventsImageBarrierHazard(const SyncEnvironment& env, const AccessContext& access_context,
+                                           vvl::span<const std::shared_ptr<const vvl::Event>> events,
+                                           vvl::span<const BarrierSet> barrier_sets, const ErrorReporter& reporter) {
+    bool skip = false;
+    const SyncValidator& validator = env.validator;
+
+    for (size_t event_index = 0; event_index < events.size(); event_index++) {
+        const SyncEventState* sync_event = env.events_context.Get(events[event_index]);
+        if (!sync_event || !sync_event->first_scope) {
+            continue;  // [core validation check]: invalid event or no preceding SetEvent
+        }
+        const BarrierSet& barrier_set = barrier_sets[barrier_sets.size() == 1 ? 0 : event_index];
+        for (const SyncImageBarrier& barrier : barrier_set.image_barriers) {
+            if (!barrier.image || !barrier.layout_transition) {
+                continue;
+            }
+            const HazardResult hazard = access_context.DetectImageBarrierHazard(
+                *barrier.image, barrier.subresource_range, sync_event->scope.exec_scope, barrier.barrier.src_access_scope,
+                env.queue_id, sync_event->FirstScope(), sync_event->first_scope_tag, AccessContext::kDetectAll);
+            if (hazard.IsHazard()) {
+                const std::string resource_description = validator.FormatHandle(barrier.image->Handle());
+                const std::string error =
+                    validator.error_messages_.ImageBarrierError(env, hazard, reporter, resource_description, barrier);
+                // Preserve record-time object lists until event reporting is unified.
+                const LogObjectList objlist = reporter.IsReplay() ? BaseObjectList(env, reporter, barrier.image->Handle())
+                                                                  : LogObjectList(barrier.image->Handle());
+                skip |= reporter.ReportHazard(hazard, barrier.image->Handle(), objlist, reporter.loc, error);
+                break;
+            }
+        }
+    }
+    return skip;
+}
+
+void ApplyCmdSetEvent(SyncEnvironment& env, const vvl::Event& event, const SyncExecScope& src_exec_scope,
+                      const std::shared_ptr<const AccessContext>& src_access_context, ResourceUsageTag tag, vvl::Func command) {
+    SyncEventState& sync_event = env.events_context.GetOrCreate(event);
+
+    // What happens with two SetEvent is that one cannot know what group of operations will be waited for.
+    // Given:
+    //     Stuff1; SetEvent; Stuff2; SetEvent; WaitEvents;
+    // WaitEvents cannot know which of Stuff1, Stuff2, or both has completed execution.
+
+    if (!sync_event.HasBarrier(src_exec_scope.stage_mask, src_exec_scope.exec_scope)) {
+        sync_event.unsynchronized_set = sync_event.last_command;
+        sync_event.ResetFirstScope();
+    } else if (!sync_event.first_scope) {
+        // We only set the scope if there isn't one
+        sync_event.scope = src_exec_scope;
+
+        // Save the shared_ptr to copy of the access_context present at set time (sent us by the caller)
+        sync_event.first_scope = src_access_context;
+        sync_event.unsynchronized_set = vvl::Func::Empty;
+        sync_event.first_scope_tag = tag;
+    }
+    sync_event.last_command = command;
+    sync_event.last_command_tag = tag;
+    sync_event.barriers = 0;
+}
+
+void ApplyCmdResetEvent(SyncEnvironment& env, const vvl::Event& event, ResourceUsageTag tag, vvl::Func command) {
+    SyncEventState& sync_event = env.events_context.GetOrCreate(event);
+    sync_event.last_command = command;
+    sync_event.last_command_tag = tag;
+    sync_event.unsynchronized_set = vvl::Func::Empty;
+    sync_event.ResetFirstScope();
+    sync_event.barriers = 0;
+}
+
+void ApplyCmdWaitEvents(SyncEnvironment& env, AccessContext& access_context,
+                        vvl::span<const std::shared_ptr<const vvl::Event>> events, vvl::span<const BarrierSet> barrier_sets,
+                        ResourceUsageTag tag, vvl::Func command) {
     // Unlike PipelineBarrier, WaitEvent is *not* limited to accesses within the current subpass (if any) and thus needs to import
     // all accesses. Can instead import for all first_scopes, or a union of them, if this becomes a performance/memory issue,
     // but with no idea of the performance of the union, nor of whether it even matters... take the simplest approach here,
-
-    AccessContext& access_context = exec_context.GetCurrentAccessContext();
-    SyncEventsContext& events_context = exec_context.GetEventsContext();
-    const QueueId queue_id = exec_context.GetQueueId();
 
     access_context.ResolveAllSubpassDependencies();
 
@@ -208,15 +414,17 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
     // to apply pending barriers in the end).
     //
     // NOTE: event's global barriers can split() access map because EventSimpleRangeGenerator filters kFullRange.
-    // That's why, in contrast to SyncOpPipelineBarrier, we need apply markup action also to global barriers.
+    // That's why, in contrast to ApplyBarrier, we need apply markup action also to global barriers.
     // TODO: need a test that demonstrates this (when doing some work on syncval events)
     size_t barrier_set_index = 0;
     size_t barrier_set_incr = (barrier_sets.size() == 1) ? 0 : 1;
     for (auto& event_shared : events) {
+        const auto& barrier_set = barrier_sets[barrier_set_index];
+        barrier_set_index += barrier_set_incr;
         if (!event_shared) {
             continue;
         }
-        auto* sync_event = events_context.GetFromShared(event_shared);
+        auto* sync_event = env.events_context.GetFromShared(event_shared);
         if (!sync_event->first_scope) {
             continue;  // [core validation check]
         }
@@ -224,7 +432,6 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
         sync_event->last_command = command;
         sync_event->last_command_tag = tag;
 
-        const auto& barrier_set = barrier_sets[barrier_set_index];
         for (const SyncBufferBarrier& barrier : barrier_set.buffer_barriers) {
             if (SimpleBinding(*barrier.buffer)) {
                 const VkDeviceSize base_address = ResourceBaseAddress(*barrier.buffer);
@@ -237,16 +444,21 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
         for (const SyncImageBarrier& barrier : barrier_set.image_barriers) {
             const auto& sub_state = SubState(*barrier.image);
             const bool can_transition_depth_slices = CanTransitionDepthSlices(
-                exec_context.GetSyncState().extensions, sub_state.base.GetImageType(), sub_state.base.create_flags);
+                env.validator.enabled_features, sub_state.base.GetImageType(), sub_state.base.create_flags);
             ImageRangeGen range_gen = sub_state.MakeImageRangeGen(barrier.subresource_range, can_transition_depth_slices);
             EventImageRangeGenerator filtered_range_gen(sync_event->FirstScope(), range_gen);
             ApplyMarkupFunctor markup_action(barrier.layout_transition);
-            access_context.UpdateMemoryAccessState(markup_action, filtered_range_gen);
+            if (barrier.layout_transition) {
+                // The transition writes the whole barrier range, including regions that had
+                // no access before SetEvent. Only its source accesses are limited by the event.
+                access_context.UpdateMemoryAccessState(markup_action, range_gen);
+            } else {
+                access_context.UpdateMemoryAccessState(markup_action, filtered_range_gen);
+            }
         }
         auto global_barriers_range_gen = EventSimpleRangeGenerator(sync_event->FirstScope(), kFullRange);
         ApplyMarkupFunctor markup_action(false);
         access_context.UpdateMemoryAccessState(markup_action, global_barriers_range_gen);
-        barrier_set_index += barrier_set_incr;
     }
 
     // Apply barriers independently and store the result in the pending object.
@@ -254,15 +466,16 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
     barrier_set_index = 0;
     barrier_set_incr = (barrier_sets.size() == 1) ? 0 : 1;
     for (auto& event_shared : events) {
+        const auto& barrier_set = barrier_sets[barrier_set_index];
+        barrier_set_index += barrier_set_incr;
         if (!event_shared.get()) {
             continue;
         }
-        auto* sync_event = events_context.GetFromShared(event_shared);
+        auto* sync_event = env.events_context.GetFromShared(event_shared);
         if (!sync_event->first_scope) {
             continue;  // [core validation check]
         }
 
-        const auto& barrier_set = barrier_sets[barrier_set_index];
         const auto& dst = barrier_set.dst_exec_scope;
 
         // These apply barriers one at a time as the are restricted to the resource ranges specified per each barrier,
@@ -272,7 +485,7 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
         for (const SyncBufferBarrier& barrier : barrier_set.buffer_barriers) {
             if (SimpleBinding(*barrier.buffer)) {
                 const SyncBarrier event_barrier = RestrictToEvent(barrier.barrier, *sync_event);
-                const BarrierScope barrier_scope(event_barrier, queue_id, sync_event->first_scope_tag);
+                const BarrierScope barrier_scope(event_barrier, env.queue_id, sync_event->first_scope_tag);
                 CollectBarriersFunctor collect_barriers(access_context, barrier_scope, event_barrier, false, vvl::kNoIndex32,
                                                         pending_barriers);
 
@@ -285,24 +498,28 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
         }
         for (const SyncImageBarrier& barrier : barrier_set.image_barriers) {
             const SyncBarrier event_barrier = RestrictToEvent(barrier.barrier, *sync_event);
-            const BarrierScope barrier_scope(event_barrier, queue_id, sync_event->first_scope_tag);
+            const BarrierScope barrier_scope(event_barrier, env.queue_id, sync_event->first_scope_tag);
             CollectBarriersFunctor collect_barriers(access_context, barrier_scope, event_barrier, barrier.layout_transition,
                                                     barrier.handle_index, pending_barriers);
 
             const auto& sub_state = SubState(*barrier.image);
             const bool can_transition_depth_slices = CanTransitionDepthSlices(
-                exec_context.GetSyncState().extensions, sub_state.base.GetImageType(), sub_state.base.create_flags);
+                env.validator.enabled_features, sub_state.base.GetImageType(), sub_state.base.create_flags);
             ImageRangeGen range_gen = sub_state.MakeImageRangeGen(barrier.subresource_range, can_transition_depth_slices);
             EventImageRangeGenerator filtered_range_gen(sync_event->FirstScope(), range_gen);
 
-            access_context.UpdateMemoryAccessState(collect_barriers, filtered_range_gen);
+            if (barrier.layout_transition) {
+                access_context.UpdateMemoryAccessState(collect_barriers, range_gen);
+            } else {
+                access_context.UpdateMemoryAccessState(collect_barriers, filtered_range_gen);
+            }
         }
         // TODO: because each iteration applies functor to the same range, investigate if it is
         // beneficial for the functor to support multiple barriers, so we traverse access map once.
         auto global_range_gen = EventSimpleRangeGenerator(sync_event->FirstScope(), kFullRange);
         for (const auto& barrier : barrier_set.memory_barriers) {
             const SyncBarrier event_barrier = RestrictToEvent(barrier, *sync_event);
-            const BarrierScope barrier_scope(event_barrier, queue_id, sync_event->first_scope_tag);
+            const BarrierScope barrier_scope(event_barrier, env.queue_id, sync_event->first_scope_tag);
             CollectBarriersFunctor collect_barriers(access_context, barrier_scope, event_barrier, false, vvl::kNoIndex32,
                                                     pending_barriers);
 
@@ -314,8 +531,6 @@ void ApplyWaitEvents(CommandExecutionContext& exec_context, const std::vector<st
         // Events don't happen at a stage, so we need to store the unexpanded ALL_COMMANDS if set for inter-event-calls
         sync_event->barriers = dst.stage_mask & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         sync_event->barriers |= dst.exec_scope;
-
-        barrier_set_index += barrier_set_incr;
     }
 
     // Update access states with collected barriers

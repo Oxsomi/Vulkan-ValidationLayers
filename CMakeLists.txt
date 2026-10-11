@@ -19,7 +19,7 @@ cmake_minimum_required(VERSION 3.22.1)
 # The VERSION field is generated with the "--generated-version" flag in the generate_source.py script
 #
 # If working with unreleased extensions, make sure the header and validation version are all on the same header version
-project(VVL VERSION 1.4.357 LANGUAGES CXX)
+project(VVL VERSION 1.4.365 LANGUAGES CXX)
 
 # This variable enables downstream users to customize the target API
 # variant (e.g. Vulkan SC)
@@ -33,6 +33,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_CXX_VISIBILITY_PRESET "hidden")
 set(CMAKE_VISIBILITY_INLINES_HIDDEN "YES")
+# Static libraries don't link, so they can start building
+# without waiting for the libraries they depend on
+set(CMAKE_OPTIMIZE_DEPENDENCIES ON)
 
 include(GNUInstallDirs)
 
@@ -124,6 +127,30 @@ find_package(SPIRV-Headers CONFIG QUIET)
 
 find_package(SPIRV-Tools-opt CONFIG QUIET)
 
+# Workaround AppleClang using the wrong headers when there are headers in /usr/local/include
+if (CMAKE_CXX_COMPILER_ID STREQUAL AppleClang AND TARGET Vulkan::Headers AND TARGET Vulkan::LayerSettings
+    AND TARGET SPIRV-Headers::SPIRV-Headers AND TARGET SPIRV-Tools-static AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.25)
+    get_target_property(vulkan_headers_aliased Vulkan::Headers ALIASED_TARGET)
+    if (NOT vulkan_headers_aliased)
+        set_target_properties(Vulkan::Headers PROPERTIES SYSTEM OFF)
+    endif()
+    get_target_property(vulkan_utilities_aliased Vulkan::LayerSettings ALIASED_TARGET)
+    if (NOT vulkan_utilities_aliased)
+        set_target_properties(Vulkan::LayerSettings PROPERTIES SYSTEM OFF)
+        set_target_properties(Vulkan::SafeStruct PROPERTIES SYSTEM OFF)
+        set_target_properties(Vulkan::UtilityHeaders PROPERTIES SYSTEM OFF)
+    endif()
+    get_target_property(spirv_headers_aliased SPIRV-Headers::SPIRV-Headers ALIASED_TARGET)
+    if (NOT spirv_headers_aliased)
+        set_target_properties(SPIRV-Headers::SPIRV-Headers PROPERTIES SYSTEM OFF)
+    endif()
+    get_target_property(spirv_tools_opt_aliased SPIRV-Tools-opt  ALIASED_TARGET)
+    if (NOT spirv_tools_opt_aliased)
+        set_target_properties(SPIRV-Tools-static PROPERTIES SYSTEM OFF)
+        set_target_properties(SPIRV-Tools-opt PROPERTIES SYSTEM OFF)
+    endif()
+endif()
+
 # NOTE: Our custom code generation target isn't desirable for system package managers or add_subdirectory users.
 # So this target needs to be off by default to avoid obtuse build errors or patches.
 option(VVL_CODEGEN "Enable vulkan validation layer code generation")
@@ -149,6 +176,18 @@ endif()
 option(BUILD_WERROR "Treat compiler warnings as errors")
 if (BUILD_WERROR)
     add_compile_options("$<IF:$<CXX_COMPILER_ID:MSVC>,/WX,-Werror>")
+    # MSVC only: turns link.exe warnings (e.g. LNK4098, mismatched Debug/Release runtimes) into
+    # build failures too. There's no cross-platform link.exe/ld equivalent to add here.
+    # TODO: replace with CMAKE_LINK_WARNING_AS_ERROR once the minimum CMake version is >= 4.0.
+    #
+    # LNK4099 (PDB for a prebuilt dependency .lib not found) is ignored: it's a pre-existing,
+    # benign issue independent of this fix - our dependencies' static libraries don't carry
+    # their compiler-generated PDBs (CMake's COMPILE_PDB_NAME isn't installable for STATIC_LIBRARY
+    # targets via $<TARGET_PDB_FILE:...>), so the linker always falls back to no debug info for
+    # those objects. It was already happening before /WX was added to the linker; /WX would just
+    # newly turn it into a hard failure. Fixing it for real means installing each dependency's own
+    # PDB, which requires patching that dependency's CMakeLists.txt, not something to do here.
+    add_link_options("$<$<CXX_COMPILER_ID:MSVC>:/WX;/IGNORE:4099>")
 endif()
 
 option(VVL_ENABLE_ASAN "Use address sanitization")

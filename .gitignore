@@ -30,6 +30,7 @@ out64/*
 *.files
 *.includes
 .vscode/
+.vs/
 .DS_Store
 .editorconfig
 scripts/.vs
@@ -37,6 +38,7 @@ scripts/.vs
 *~
 *.10x
 *.clangd
+*.zed/*
 
 # BUILD.gn artifacts
 .cipd/

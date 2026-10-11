@@ -99,7 +99,6 @@ class Pipeline : public StateObject, public SubStateManager<PipelineSubState> {
     const bool descriptor_heap_mode;
 
     vvl::span<const vku::safe_VkPipelineShaderStageCreateInfo> shader_stages_ci;
-    VkPipelineShaderStageCreateInfo data_graph_shader_stage_ci;
     const vku::safe_VkPipelineLibraryCreateInfoKHR *ray_tracing_library_ci = nullptr;
     // If using a shader module identifier, the module itself is not validated, but the shader stage is still known
     const bool uses_shader_module_id;
@@ -164,9 +163,6 @@ class Pipeline : public StateObject, public SubStateManager<PipelineSubState> {
     Pipeline(const DeviceState &state_data, const VkRayTracingPipelineCreateInfoKHR *pCreateInfo,
              std::shared_ptr<const vvl::PipelineCache> &&pipe_cache, std::shared_ptr<const vvl::PipelineLayout> &&layout,
              std::vector<spirv::StatelessData> *stateless_data);
-
-    Pipeline(const DeviceState &state_data, const VkRayTracingPipelineCreateInfoNV *pCreateInfo,
-             std::shared_ptr<const vvl::PipelineCache> &&pipe_cache, std::shared_ptr<const vvl::PipelineLayout> &&layout);
 
     Pipeline(const DeviceState &state_data, const VkDataGraphPipelineCreateInfoARM *pCreateInfo,
              std::shared_ptr<const vvl::PipelineCache> &&pipe_cache, std::shared_ptr<const vvl::PipelineLayout> &&layout,
@@ -466,18 +462,25 @@ class Pipeline : public StateObject, public SubStateManager<PipelineSubState> {
     // From https://gitlab.khronos.org/vulkan/vulkan/-/issues/3263
     // None of these require VK_EXT_extended_dynamic_state3
     inline bool IsDepthStencilStateDynamic() const {
-        return IsDynamic(CB_DYNAMIC_STATE_DEPTH_TEST_ENABLE) && IsDynamic(CB_DYNAMIC_STATE_DEPTH_WRITE_ENABLE) &&
-               IsDynamic(CB_DYNAMIC_STATE_DEPTH_COMPARE_OP) && IsDynamic(CB_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE) &&
-               IsDynamic(CB_DYNAMIC_STATE_STENCIL_TEST_ENABLE) && IsDynamic(CB_DYNAMIC_STATE_STENCIL_OP) &&
-               IsDynamic(CB_DYNAMIC_STATE_DEPTH_BOUNDS);
+        return (dynamic_state & kDepthStencilStateDynamic) == kDepthStencilStateDynamic;
     }
 
     // If true, VK_EXT_extended_dynamic_state3 must also have been enabled
-    inline bool IsColorBlendStateDynamic() const {
-        return IsDynamic(CB_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT) && IsDynamic(CB_DYNAMIC_STATE_LOGIC_OP_EXT) &&
-               IsDynamic(CB_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT) && IsDynamic(CB_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT) &&
-               IsDynamic(CB_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT) && IsDynamic(CB_DYNAMIC_STATE_BLEND_CONSTANTS);
+    inline bool IsColorBlendStateDynamic() const { return (dynamic_state & kColorBlendStateDynamic) == kColorBlendStateDynamic; }
+
+    // If true, VK_EXT_extended_dynamic_state3 must also have been enabled
+    inline bool IsRasterizationStateDynamic() const {
+        return (dynamic_state & kRasterizationStateDynamic) == kRasterizationStateDynamic;
     }
+
+    // From VkPipelineColorBlendStateCreateInfo::attachmentCount definition of when it is ignored
+    inline bool IsColorBlendStateAttachmentCountIgnore(bool advance_blend_coherent_operations) const {
+        return IsDynamic(CB_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT) && IsDynamic(CB_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT) &&
+               IsDynamic(CB_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT) &&
+               (IsDynamic(CB_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT) || !advance_blend_coherent_operations);
+    }
+
+    std::string DescribeDynamicStateSet(const CBDynamicFlags& states) const;
 
     template <typename CreateInfo>
     static bool EnablesRasterizationStates(const vvl::DeviceState &device_state, const CreateInfo &create_info) {

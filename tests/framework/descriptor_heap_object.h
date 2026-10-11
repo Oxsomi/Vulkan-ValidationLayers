@@ -30,14 +30,17 @@ namespace as {
 class AccelerationStructureKHR;
 }
 
-class DescriptorHeap {
+class DescriptorHeapEXT {
   public:
     static void AddDescriptorHeapRequirements(VkLayerTest& test);
     static void AddUntypedDescriptorHeapRequirements(VkLayerTest &test);
 
-    DescriptorHeap(VkLayerTest& test);
+    DescriptorHeapEXT(VkLayerTest& test);
     void CreateResourceHeap(VkDeviceSize app_size, bool reserved_range_in_front = false);
     void CreateSamplerHeap(VkDeviceSize app_size, bool reserved_range_in_front = false, bool use_embedded_samplers = false);
+
+    VkDeviceSize GetResourceHeapSize() const;
+    VkDeviceAddressRangeKHR GetResourceHeapAddressRange() const;
 
     // Writes a descriptor at the internally maintained heap write offset.
     // Heap write offset is first aligned according to descriptor type,
@@ -53,11 +56,13 @@ class DescriptorHeap {
     // Write at supplied heap offset
     // *Warning* Internally maintained heap write offset will not be touched at all,
     // so this probably should not be used with the above functions.
+    VkDeviceSize WriteBufferDescriptorAtOffset(const vkt::Buffer& buffer, VkDescriptorType desc_type, VkDeviceSize heap_offset);
     VkDeviceSize WriteBufferDescriptorAtOffset(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type,
                                                VkDeviceSize heap_offset);
     VkDeviceSize WriteImageDescriptorAtOffset(const vkt::Image& image, VkDeviceSize heap_offset,
                                               VkDescriptorType desc_type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                                               VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VkDeviceSize WriteSamplerDescriptorAtOffset(VkSamplerCreateInfo* sampler_create_info, VkDeviceSize heap_offset);
     VkDeviceSize WriteNullDescriptorAtOffset(VkDescriptorType desc_type, VkDeviceSize heap_offset);
 
     VkDeviceSize AlignResource(VkDeviceSize offset);

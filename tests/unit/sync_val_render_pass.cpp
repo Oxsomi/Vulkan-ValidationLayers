@@ -1190,3 +1190,191 @@ TEST_F(NegativeSyncValRenderPass, MultiviewClearAttachmentsDepth) {
     vk::CmdClearAttachments(m_command_buffer, 1, &clear_attachment, 1, &clear_rect);
     m_errorMonitor->VerifyFound();
 }
+
+TEST_F(NegativeSyncValRenderPass, DrawMeshTasksAttachmentSubmitTime) {
+    TEST_DESCRIPTION("Detect a mesh draw attachment hazard between submissions");
+    SetTargetApiVersion(VK_API_VERSION_1_3);
+    AddRequiredExtensions(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+    AddRequiredExtensions(VK_EXT_LOAD_STORE_OP_NONE_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::maintenance4);
+    AddRequiredFeature(vkt::Feature::meshShader);
+    RETURN_IF_SKIP(InitSyncVal());
+
+    const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    RenderPassSingleSubpass rp(*this);
+    // Only the draw accesses the attachment, not the load/store operations or layout transitions.
+    rp.AddAttachmentDescription(format, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_ATTACHMENT_LOAD_OP_NONE,
+                                VK_ATTACHMENT_STORE_OP_NONE);
+    rp.AddColorAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
+    rp.CreateRenderPass();
+
+    vkt::Image src_image(*m_device, 64, 64, format, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    vkt::Image image(*m_device, 64, 64, format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    vkt::ImageView image_view = image.CreateView();
+    src_image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
+    image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
+    vkt::Framebuffer framebuffer(*m_device, rp, 1, &image_view.handle(), 64, 64);
+
+    VkShaderObj mesh_shader(*m_device, kMeshMinimalGlsl, VK_SHADER_STAGE_MESH_BIT_EXT, SPV_ENV_VULKAN_1_3);
+    CreatePipelineHelper pipe(*this);
+    pipe.gp_ci_.renderPass = rp;
+    pipe.shader_stages_[0] = mesh_shader.GetStageCreateInfo();
+    pipe.CreateGraphicsPipeline();
+
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {64, 64, 1};
+    vkt::CommandBuffer copy_cb(*m_device, m_command_pool);
+    copy_cb.Begin();
+    vk::CmdCopyImage(copy_cb, src_image, VK_IMAGE_LAYOUT_GENERAL, image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    copy_cb.End();
+
+    m_command_buffer.Begin();
+    m_command_buffer.BeginRenderPass(rp, framebuffer, 64, 64);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vk::CmdDrawMeshTasksEXT(m_command_buffer, 1, 1, 1);
+    m_command_buffer.EndRenderPass();
+    m_command_buffer.End();
+
+    m_default_queue->Submit(copy_cb);
+    m_errorMonitor->SetDesiredError("SYNC-HAZARD-WRITE-AFTER-WRITE");
+    m_default_queue->Submit(m_command_buffer);
+    m_errorMonitor->VerifyFound();
+    m_default_queue->Wait();
+}
+
+TEST_F(NegativeSyncValRenderPass, StencilWriteWithDepthOnlyView) {
+    TEST_DESCRIPTION("Depth/stencil attachment accesses ignore the image view's aspect mask");
+    AddRequiredExtensions(VK_KHR_LOAD_STORE_OP_NONE_EXTENSION_NAME);
+    RETURN_IF_SKIP(InitSyncVal());
+
+    const VkFormat format = FindSupportedDepthStencilFormat(Gpu());
+    vkt::Image image(*m_device, 32, 32, format, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+    image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
+    const vkt::ImageView view = image.CreateView(VK_IMAGE_ASPECT_DEPTH_BIT);
+    vkt::Buffer buffer(*m_device, 32 * 32 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+
+    VkAttachmentDescription attachment{};
+    attachment.format = format;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_NONE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_NONE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    RenderPassSingleSubpass rp(*this);
+    rp.AddAttachmentDescription(attachment);
+    rp.AddDepthStencilAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
+    rp.CreateRenderPass();
+    vkt::Framebuffer fb(*m_device, rp, 1, &view.handle(), 32, 32);
+
+    VkClearValue clear{};
+    clear.depthStencil = {1.0f, 1};
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1};
+    copy.imageOffset = {16, 0, 0};
+    copy.imageExtent = {16, 32, 1};
+
+    m_command_buffer.Begin();
+    m_command_buffer.BeginRenderPass(rp, fb, 16, 32, 1, &clear);
+    m_command_buffer.EndRenderPass();
+    m_errorMonitor->SetDesiredError("SYNC-HAZARD-READ-AFTER-WRITE");
+    vk::CmdCopyImageToBuffer(m_command_buffer, image, VK_IMAGE_LAYOUT_GENERAL, buffer, 1, &copy);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeSyncValRenderPass, StoreHazardOutsideRenderAreaAfterDraw) {
+    TEST_DESCRIPTION("A stencil store after draws conflicts with an earlier write outside the render area");
+    RETURN_IF_SKIP(InitSyncVal());
+
+    const VkFormat format = FindSupportedDepthStencilFormat(Gpu());
+    vkt::Image image(*m_device, 32, 32, format, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
+    const vkt::ImageView view = image.CreateView(VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+    vkt::Buffer source(*m_device, 32 * 32 * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 0, 1};
+    copy.imageOffset = {16, 0, 0};
+    copy.imageExtent = {16, 32, 1};
+
+    VkAttachmentDescription attachment{};
+    attachment.format = format;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    attachment.storeOp = attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.initialLayout = attachment.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    RenderPassSingleSubpass rp(*this);
+    rp.AddAttachmentDescription(attachment);
+    rp.AddDepthStencilAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
+    rp.CreateRenderPass();
+    vkt::Framebuffer fb(*m_device, rp, 1, &view.handle(), 32, 32);
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil = vku::InitStructHelper();
+    depth_stencil.stencilTestEnable = VK_TRUE;
+    depth_stencil.front.compareOp = VK_COMPARE_OP_ALWAYS;
+    depth_stencil.front.passOp = VK_STENCIL_OP_REPLACE;
+    depth_stencil.front.writeMask = 0xff;  // without this, the test passes without exercising draw tracking
+    CreatePipelineHelper pipe(*this);
+    pipe.gp_ci_.renderPass = rp;
+    pipe.gp_ci_.pDepthStencilState = &depth_stencil;
+    const VkRect2D scissor = {{0, 0}, {16, 32}};
+    pipe.vp_state_ci_.pScissors = &scissor;
+    pipe.cb_ci_.attachmentCount = 0;
+    pipe.CreateGraphicsPipeline();
+
+    m_command_buffer.Begin();
+    vk::CmdCopyBufferToImage(m_command_buffer, source, image, VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
+    m_command_buffer.BeginRenderPass(rp, fb, 16, 32);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vk::CmdDraw(m_command_buffer, 3, 1, 0, 0);
+    vk::CmdDraw(m_command_buffer, 3, 1, 0, 0);
+    m_errorMonitor->SetDesiredError("SYNC-HAZARD-WRITE-AFTER-WRITE");
+    m_command_buffer.EndRenderPass();
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.Reset();
+}
+
+TEST_F(NegativeSyncValRenderPass, VertexReadAcrossMultipleRanges) {
+    TEST_DESCRIPTION("Vertex read spans several memory ranges");
+    RETURN_IF_SKIP(InitSyncVal());
+    InitRenderTarget();
+
+    vkt::Buffer buffer(*m_device, 48, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+
+    // Each vertex is 16 bytes
+    VkVertexInputBindingDescription binding{0, 16, VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attribute{0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0};
+
+    CreatePipelineHelper pipe(*this);
+    pipe.SetVertexInput(binding, attribute);
+    pipe.CreateGraphicsPipeline();
+
+    VkMemoryBarrier barrier = vku::InitStructHelper();
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+
+    const VkDeviceSize offset = 0;
+    m_command_buffer.Begin();
+
+    // These initial fills are correctly synchronized with the draw and create two access ranges.
+    // Due to a bug, the draw's vertex read was recorded only in the first range.
+    // The second range retained its transfer write synchronized by the barrier, so the
+    // final fill did not generate the expected WAR hazard with the previous vertex read
+    vk::CmdFillBuffer(m_command_buffer, buffer, 0, 16, 0);
+    vk::CmdFillBuffer(m_command_buffer, buffer, 16, 32, 0);
+    m_command_buffer.Barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, barrier);
+
+    m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vk::CmdBindVertexBuffers(m_command_buffer, 0, 1, &buffer.handle(), &offset);
+    vk::CmdDraw(m_command_buffer, 3, 1, 0, 0);  // accesses 3 * 16 = 48 bytes of vertex data
+    m_command_buffer.EndRenderPass();
+
+    m_errorMonitor->SetDesiredError("SYNC-HAZARD-WRITE-AFTER-READ");
+    vk::CmdFillBuffer(m_command_buffer, buffer, 16, 32, 0);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}

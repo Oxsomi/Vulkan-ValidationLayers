@@ -19,12 +19,13 @@
 
 #include "sync/sync_common.h"
 
-struct DeviceExtensions;
+struct DeviceFeatures;
 
 namespace syncval {
 
+class AccessContext;
 class SyncValidator;
-class CommandExecutionContext;
+struct SyncEnvironment;
 
 struct SyncExecScope {
     // The xxxStageMask parameter passed by the caller
@@ -130,9 +131,9 @@ struct BarrierSet {
                                   const VkBufferMemoryBarrier2* barriers);
 
     void MakeImageMemoryBarriers(const SyncValidator& sync_state, const SyncExecScope& src, const SyncExecScope& dst,
-                                 uint32_t barrier_count, const VkImageMemoryBarrier* barriers, const DeviceExtensions& extensions);
+                                 uint32_t barrier_count, const VkImageMemoryBarrier* barriers, const DeviceFeatures& features);
     void MakeImageMemoryBarriers(const SyncValidator& sync_state, VkQueueFlags queue_flags, uint32_t barrier_count,
-                                 const VkImageMemoryBarrier2* barriers, const DeviceExtensions& extensions);
+                                 const VkImageMemoryBarrier2* barriers, const DeviceFeatures& features);
 };
 
 // Defines the source scope of the barrier.
@@ -161,6 +162,6 @@ struct SemaphoreScope : SyncExecScope {
     QueueId queue;
 };
 
-void ApplyBarrier(CommandExecutionContext& exec_context, const BarrierSet& barrier_set, ResourceUsageTag tag);
+void ApplyBarrier(SyncEnvironment& env, AccessContext& access_context, const BarrierSet& barrier_set, ResourceUsageTag tag);
 
 }  // namespace syncval

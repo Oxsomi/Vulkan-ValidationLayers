@@ -79,8 +79,8 @@ vvl::Field DescriptorBufferSizeField(bool robust, VkDescriptorType type) {
     return vvl::Field::Empty;
 }
 
-bool IsResourceVaribleInMapping(const VkDescriptorSetAndBindingMappingEXT& mapping,
-                                const spirv::ResourceInterfaceVariable& resource_variable) {
+bool IsResourceVariableInMapping(const VkDescriptorSetAndBindingMappingEXT& mapping,
+                                 const spirv::ResourceInterfaceVariable& resource_variable) {
     const uint32_t descriptor_set = resource_variable.decorations.set;
     const uint32_t descriptor_binding = resource_variable.decorations.binding;
     // bindingCount could be UINT32_MAX
@@ -169,6 +169,9 @@ std::string DescribeResourceTypeMismatch(VkSpirvResourceTypeFlagsEXT resource_ty
                 return "is not decorated with NonWritable on the OpVariable, but is in the OpTypeStruct. This likely is hitting a "
                        "known DXC code generation bug (DirectXShaderCompiler/issues/8492). Simple work around is to just use "
                        "VK_SPIRV_RESOURCE_TYPE_ALL_EXT here as that will give the desired behavior.";
+            } else if (resource_variable.is_input_attachment) {
+                return "is not decorated with NonWritable (Note: InputAttachments actually use READ_WRITE_IMAGE_BIT not "
+                       "READ_ONLY_IMAGE_BIT without NonWritable, but your shader toolchains is likely not supplying it.)";
             } else {
                 return "is not decorated with NonWritable";
             }
@@ -180,7 +183,7 @@ std::string DescribeResourceTypeMismatch(VkSpirvResourceTypeFlagsEXT resource_ty
         } else if (resource_variable.base_type.Word(7) != 2) {
             return "OpTypeImage Sampled is " + std::to_string(resource_variable.base_type.Word(7)) + ", not 2";
         } else if (resource_variable.decorations.Has(spirv::DecorationSet::nonwritable_bit)) {
-            return "is decorated with NonWritable";
+            return "is decorated with NonWritable (READ_ONLY_IMAGE_BIT would match)";
         }
     }
     if ((resource_type & VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT) != 0 &&
@@ -212,8 +215,8 @@ std::string DescribeResourceTypeMismatch(VkSpirvResourceTypeFlagsEXT resource_ty
         }
     }
     if ((resource_type & VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT) != 0) {
-        if (!resource_variable.decorations.Has(spirv::DecorationSet::nonwritable_bit)) {
-            return "is decorated with NonWritable";
+        if (resource_variable.decorations.Has(spirv::DecorationSet::nonwritable_bit)) {
+            return "is decorated with NonWritable (READ_ONLY_STORAGE_BUFFER_BIT would match)";
         } else if (!resource_variable.type_struct_info) {
             return "is not a OpTypeStruct";
         } else if (!resource_variable.is_storage_buffer) {
@@ -305,11 +308,7 @@ void CachedDescriptorSize::Init(const vvl::DeviceState& device_state) {
         } else {
             heap_size_[1] = 0;
         }
-        if (IsExtEnabled(device_state.extensions.vk_nv_ray_tracing)) {
-            heap_size_[8] = DispatchGetPhysicalDeviceDescriptorSizeEXT(gpu, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV);
-        } else {
-            heap_size_[8] = 0;
-        }
+        heap_size_[8] = 0;  // VK_NV_ray_tracing is not validated
         if (IsExtEnabled(device_state.extensions.vk_nv_partitioned_acceleration_structure)) {
             heap_size_[9] =
                 DispatchGetPhysicalDeviceDescriptorSizeEXT(gpu, VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV);

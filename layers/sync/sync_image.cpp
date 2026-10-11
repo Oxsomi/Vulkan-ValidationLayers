@@ -48,7 +48,7 @@ void ImageSubState::SetOpaqueBaseAddress(vvl::DeviceState& dev_data) {
     }
     if (!opaque_base) {
         // The size of the opaque range is based on the SyncVal *internal* representation of the tiled resource, unrelated
-        // to the acutal size of the the resource in device memory. If differing representations become possible, the allocated
+        // to the acutal size of the resource in device memory. If differing representations become possible, the allocated
         // size would need to be changed to those representation's size requirements.
         opaque_base = dev_data.AllocFakeMemory(fragment_encoder.TotalSize());
     }
@@ -89,8 +89,7 @@ ImageRangeGen ImageSubState::MakeImageRangeGen(const VkImageSubresourceRange& su
     }
 
     const auto base_address = GetResourceBaseAddress();
-    subresource_adapter::ImageRangeGenerator range_gen(fragment_encoder, subresource_range, offset, extent, base_address,
-                                                       is_depth_sliced);
+    ImageRangeGenerator range_gen(fragment_encoder, subresource_range, offset, extent, base_address, is_depth_sliced);
     return range_gen;
 }
 

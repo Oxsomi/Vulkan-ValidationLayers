@@ -1094,21 +1094,6 @@ void Device::PostCallRecordDestroySampler(VkDevice device, VkSampler sampler, co
     // Host access to sampler must be externally synchronized
 }
 
-void Device::PreCallRecordDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout,
-                                                     const VkAllocationCallbacks* pAllocator, const RecordObject& record_obj) {
-    StartReadObjectParentInstance(device, record_obj.location);
-    StartWriteObject(descriptorSetLayout, record_obj.location);
-    // Host access to descriptorSetLayout must be externally synchronized
-}
-
-void Device::PostCallRecordDestroyDescriptorSetLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout,
-                                                      const VkAllocationCallbacks* pAllocator, const RecordObject& record_obj) {
-    FinishReadObjectParentInstance(device, record_obj.location);
-    FinishWriteObject(descriptorSetLayout, record_obj.location);
-    DestroyObject(descriptorSetLayout);
-    // Host access to descriptorSetLayout must be externally synchronized
-}
-
 void Device::PreCallRecordCreateDescriptorPool(VkDevice device, const VkDescriptorPoolCreateInfo* pCreateInfo,
                                                const VkAllocationCallbacks* pAllocator, VkDescriptorPool* pDescriptorPool,
                                                const RecordObject& record_obj) {
@@ -2951,12 +2936,6 @@ void Device::PreCallRecordCreateSharedSwapchainsKHR(VkDevice device, uint32_t sw
                                                     const VkAllocationCallbacks* pAllocator, VkSwapchainKHR* pSwapchains,
                                                     const RecordObject& record_obj) {
     StartReadObjectParentInstance(device, record_obj.location);
-
-    if (pSwapchains) {
-        for (uint32_t index = 0; index < swapchainCount; index++) {
-            StartReadObject(pSwapchains[index], record_obj.location);
-        }
-    }
 }
 
 void Device::PostCallRecordCreateSharedSwapchainsKHR(VkDevice device, uint32_t swapchainCount,
@@ -4455,20 +4434,6 @@ void Device::PreCallRecordGetImageSubresourceLayout2KHR(VkDevice device, VkImage
 void Device::PostCallRecordGetImageSubresourceLayout2KHR(VkDevice device, VkImage image, const VkImageSubresource2* pSubresource,
                                                          VkSubresourceLayout2* pLayout, const RecordObject& record_obj) {
     PostCallRecordGetImageSubresourceLayout2(device, image, pSubresource, pLayout, record_obj);
-}
-
-void Device::PreCallRecordWaitForPresent2KHR(VkDevice device, VkSwapchainKHR swapchain,
-                                             const VkPresentWait2InfoKHR* pPresentWait2Info, const RecordObject& record_obj) {
-    StartReadObjectParentInstance(device, record_obj.location);
-    StartWriteObject(swapchain, record_obj.location);
-    // Host access to swapchain must be externally synchronized
-}
-
-void Device::PostCallRecordWaitForPresent2KHR(VkDevice device, VkSwapchainKHR swapchain,
-                                              const VkPresentWait2InfoKHR* pPresentWait2Info, const RecordObject& record_obj) {
-    FinishReadObjectParentInstance(device, record_obj.location);
-    FinishWriteObject(swapchain, record_obj.location);
-    // Host access to swapchain must be externally synchronized
 }
 
 void Device::PreCallRecordDestroyPipelineBinaryKHR(VkDevice device, VkPipelineBinaryKHR pipelineBinary,

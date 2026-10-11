@@ -117,6 +117,7 @@ class VkRenderFramework : public VkTestFramework {
 
     // Swapchain capabilities declaration to be used with RETURN_IF_SKIP
     void SupportMultiSwapchain();
+    void SupportDeferredSwapchainAllocation();
     void SupportSurfaceResize();
 
     void SetPresentImageLayout(VkImage image);
@@ -131,9 +132,9 @@ class VkRenderFramework : public VkTestFramework {
     void DestroyRenderTarget();
 
     // Used for VK_EXT_shader_object
-    void SetDefaultDynamicStatesExclude(const std::vector<VkDynamicState> &exclude = {}, bool tessellation = false,
-                                        VkCommandBuffer commandBuffer = VK_NULL_HANDLE);
-    void SetDefaultDynamicStatesAll(VkCommandBuffer cmdBuffer);
+    void SetDefaultDynamicStatesExcludeEXT(const std::vector<VkDynamicState>& exclude = {}, bool tessellation = false,
+                                           VkCommandBuffer commandBuffer = VK_NULL_HANDLE);
+    void SetDefaultDynamicStatesAllEXT(VkCommandBuffer cmdBuffer);
 
     static bool IgnoreDisableChecks();
     bool IsPlatformMockICD();

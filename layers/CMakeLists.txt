@@ -31,13 +31,10 @@ target_sources(VkLayer_utils PRIVATE
     containers/small_range_map.h
     containers/small_vector.h
     containers/span.h
-    containers/tls_guard.h
     error_message/logging.h
     error_message/logging.cpp
     error_message/error_location.cpp
     error_message/error_location.h
-    error_message/error_strings.h
-    error_message/error_strings.cpp
     error_message/record_object.h
     error_message/log_message_type.h
     external/xxhash.h
@@ -185,6 +182,22 @@ if (DEBUG_CAPTURE_KEYBOARD)
     endif()
 endif()
 
+# Found to significantly cut VVL build time
+#
+# Note: If using ccache, see the CCACHE_SLOPPINESS note in tests/CMakeLists.txt
+target_precompile_headers(VkLayer_utils PRIVATE
+    <algorithm>
+    <functional>
+    <memory>
+    <mutex>
+    <sstream>
+    <string>
+    <unordered_map>
+    <vector>
+    <vulkan/vulkan.h>
+    containers/custom_containers.h
+)
+
 add_subdirectory(gpuav/spirv)
 
 if(IOS)
@@ -194,6 +207,52 @@ else()
 endif()
 
 target_sources(vvl PRIVATE
+    # Slowest files to compile come first,
+    # having them near the end could introduce needless waits
+    ${API_TYPE}/generated/dispatch_vector.cpp
+    ${API_TYPE}/generated/dispatch_object_init.cpp
+    ${API_TYPE}/generated/thread_safety.cpp
+    state_tracker/state_tracker.cpp
+    thread_tracker/thread_safety_validation.cpp
+    sync/sync_access_context.cpp
+    sync/sync_access_context.h
+    sync/sync_access_flags.h
+    sync/sync_access_map.cpp
+    sync/sync_access_map.h
+    sync/sync_access_state.cpp
+    sync/sync_access_state.h
+    sync/sync_barrier.cpp
+    sync/sync_barrier.h
+    sync/sync_command.cpp
+    sync/sync_command.h
+    sync/sync_command_buffer.cpp
+    sync/sync_command_buffer.h
+    sync/sync_common.cpp
+    sync/sync_common.h
+    sync/sync_dynamic_rendering.cpp
+    sync/sync_dynamic_rendering.h
+    sync/sync_error_messages.cpp
+    sync/sync_error_messages.h
+    sync/sync_event.cpp
+    sync/sync_event.h
+    sync/sync_hazard_detection.cpp
+    sync/sync_image.cpp
+    sync/sync_image.h
+    sync/sync_image_encoding.cpp
+    sync/sync_image_encoding.h
+    sync/sync_render_pass.cpp
+    sync/sync_render_pass.h
+    sync/sync_reporting.cpp
+    sync/sync_reporting.h
+    sync/sync_settings.h
+    sync/sync_stats.cpp
+    sync/sync_stats.h
+    sync/sync_submit.cpp
+    sync/sync_submit.h
+    sync/sync_validation.cpp
+    sync/sync_validation.h
+    # Heavy files section end
+    # Alphabetic sorting from here
     best_practices/bp_buffer.cpp
     best_practices/bp_cmd_buffer.cpp
     best_practices/bp_cmd_buffer_nv.cpp
@@ -250,6 +309,7 @@ target_sources(vvl PRIVATE
     core_checks/cc_ray_tracing_nv.cpp
     core_checks/cc_render_pass.cpp
     core_checks/cc_spirv.cpp
+    core_checks/cc_spirv_cooperative.cpp
     core_checks/cc_shader_interface.cpp
     core_checks/cc_shader_object.cpp
     core_checks/cc_state_tracker.h
@@ -268,6 +328,8 @@ target_sources(vvl PRIVATE
     drawdispatch/descriptor_validator.h
     drawdispatch/drawdispatch_vuids.cpp
     drawdispatch/drawdispatch_vuids.h
+    error_message/error_strings.h
+    error_message/error_strings.cpp
     error_message/spirv_logging.h
     error_message/spirv_logging.cpp
     error_message/unimplementable_validation.h
@@ -290,7 +352,6 @@ target_sources(vvl PRIVATE
     ${API_TYPE}/generated/dynamic_state_helper.h
     ${API_TYPE}/generated/enum_flag_bits.h
     ${API_TYPE}/generated/feature_not_present.cpp
-    ${API_TYPE}/generated/dispatch_vector.cpp
     ${API_TYPE}/generated/dispatch_object.cpp
     ${API_TYPE}/generated/validation_object_device_methods.h
     ${API_TYPE}/generated/validation_object_instance_methods.h
@@ -298,18 +359,15 @@ target_sources(vvl PRIVATE
     ${API_TYPE}/generated/object_tracker.cpp
     ${API_TYPE}/generated/object_tracker_device_methods.h
     ${API_TYPE}/generated/object_tracker_instance_methods.h
-    ${API_TYPE}/generated/spirv_grammar_helper.cpp
     ${API_TYPE}/generated/spirv_validation_helper.cpp
     ${API_TYPE}/generated/spirv_validation_helper.h
     ${API_TYPE}/generated/stateless_device_methods.h
     ${API_TYPE}/generated/stateless_instance_methods.h
     ${API_TYPE}/generated/stateless_validation_helper.cpp
     ${API_TYPE}/generated/sync_validation_types.cpp
-    ${API_TYPE}/generated/thread_safety.cpp
     ${API_TYPE}/generated/thread_safety_device_defs.h
     ${API_TYPE}/generated/thread_safety_instance_defs.h
     ${API_TYPE}/generated/gpuav_offline_spirv.h
-    ${API_TYPE}/generated/gpuav_offline_spirv.cpp
     ${API_TYPE}/generated/extended_flags_helper_generator.h
     ${API_TYPE}/generated/extended_flags_helper_generator.cpp
     gpuav/core/gpuav.h
@@ -444,13 +502,13 @@ target_sources(vvl PRIVATE
     state_tracker/shader_object_state.h
     state_tracker/shader_stage_state.cpp
     state_tracker/shader_stage_state.h
-    state_tracker/state_tracker.cpp
     state_tracker/state_tracker.h
     state_tracker/submission_reference.h
     state_tracker/submit_time_tracker.cpp
     state_tracker/submit_time_tracker.h
-    state_tracker/subresource_adapter.cpp
-    state_tracker/subresource_adapter.h
+    state_tracker/subresource_encoding.cpp
+    state_tracker/subresource_encoding.h
+    state_tracker/surface_type.h
     state_tracker/vertex_index_buffer_state.cpp
     state_tracker/vertex_index_buffer_state.h
     state_tracker/video_session_state.cpp
@@ -470,6 +528,7 @@ target_sources(vvl PRIVATE
     stateless/sl_image.cpp
     stateless/sl_instance_device.cpp
     stateless/sl_pipeline.cpp
+    stateless/sl_query.cpp
     stateless/sl_queue.cpp
     stateless/sl_ray_tracing.cpp
     stateless/sl_ray_tracing_micromap.cpp
@@ -485,40 +544,6 @@ target_sources(vvl PRIVATE
     stateless/sl_vuid_maps.h
     stateless/sl_wsi.cpp
     stateless/stateless_validation.h
-    sync/sync_access_context.cpp
-    sync/sync_access_context.h
-    sync/sync_access_flags.h
-    sync/sync_access_map.cpp
-    sync/sync_access_map.h
-    sync/sync_access_state.cpp
-    sync/sync_access_state.h
-    sync/sync_barrier.cpp
-    sync/sync_barrier.h
-    sync/sync_command_buffer.cpp
-    sync/sync_command_buffer.h
-    sync/sync_common.cpp
-    sync/sync_common.h
-    sync/sync_error_messages.cpp
-    sync/sync_error_messages.h
-    sync/sync_event.cpp
-    sync/sync_event.h
-    sync/sync_hazard_detection.cpp
-    sync/sync_image.cpp
-    sync/sync_image.h
-    sync/sync_op.cpp
-    sync/sync_op.h
-    sync/sync_render_pass.cpp
-    sync/sync_render_pass.h
-    sync/sync_reporting.cpp
-    sync/sync_reporting.h
-    sync/sync_settings.h
-    sync/sync_stats.cpp
-    sync/sync_stats.h
-    sync/sync_submit.cpp
-    sync/sync_submit.h
-    sync/sync_validation.cpp
-    sync/sync_validation.h
-    thread_tracker/thread_safety_validation.cpp
     thread_tracker/thread_safety_validation.h
     utils/descriptor_utils.cpp
     utils/descriptor_utils.h
@@ -537,6 +562,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${LAYER_SOURCES})
 if(MSVC)
     set(GPUAV_SHADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gpuav/shaders")
     file(GLOB_RECURSE GPUAV_SHADERS
+        "${GPUAV_SHADERS_DIR}/*.slang"
         "${GPUAV_SHADERS_DIR}/*.vert"
         "${GPUAV_SHADERS_DIR}/*.comp"
         "${GPUAV_SHADERS_DIR}/*.h"
@@ -644,6 +670,47 @@ if (VVL_ENABLE_TRACY)
 endif()
 
 target_include_directories(vvl SYSTEM PRIVATE external)
+
+# Found to significantly cut VVL build time
+#
+# Note: If using ccache, see the CCACHE_SLOPPINESS note in tests/CMakeLists.txt
+target_precompile_headers(vvl PRIVATE
+    # List stable headers
+    <algorithm>
+    <array>
+    <atomic>
+    <cassert>
+    <cstdint>
+    <cstdio>
+    <cstring>
+    <deque>
+    <functional>
+    <future>
+    <list>
+    <map>
+    <memory>
+    <mutex>
+    <optional>
+    <set>
+    <shared_mutex>
+    <sstream>
+    <string>
+    <string_view>
+    <unordered_map>
+    <utility>
+    <variant>
+    <vector>
+    <vulkan/vulkan.h>
+    <vulkan/vk_layer.h>
+    <vulkan/vk_enum_string_helper.h>
+    <vulkan/utility/vk_struct_helper.hpp>
+    <vulkan/utility/vk_safe_struct.hpp>
+    <spirv/unified1/spirv.hpp>
+    containers/custom_containers.h
+    # Included by almost all files and costly to parse
+    state_tracker/state_tracker.h
+    state_tracker/cmd_buffer_state.h
+)
 
 if (ANDROID)
     # Required for __android_log_print. Marking as PUBLIC since the tests use __android_log_print as well.

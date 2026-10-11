@@ -334,8 +334,8 @@ TEST_F(PositiveRayTracing, BarrierAccessMaskAccelerationStructureRayQueryDisable
 
     m_command_buffer.Begin();
     m_command_buffer.Barrier(sync2_barrier);
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                           VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1, &sync1_barrier, 0, nullptr, 0, nullptr);
+    m_command_buffer.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, sync1_barrier);
     m_command_buffer.End();
 }
 
@@ -353,8 +353,7 @@ TEST_F(PositiveRayTracing, BarrierSync1NoCrash) {
 
     m_errorMonitor->SetUnexpectedError("VUID-vkCmdPipelineBarrier-srcAccessMask-06257");
     m_command_buffer.Begin();
-    vk::CmdPipelineBarrier(m_command_buffer, invalid_src_stage, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 1, &barrier, 0, nullptr, 0,
-                           nullptr);
+    m_command_buffer.Barrier(invalid_src_stage, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, barrier);
     m_command_buffer.End();
 }
 
@@ -568,8 +567,8 @@ TEST_F(PositiveRayTracing, AccelerationStructuresReuseScratchMemory) {
         barrier.size = scratch_buffer_ci.size;
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vk::CmdPipelineBarrier(cmd_buffer_frame_0, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        cmd_buffer_frame_0.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, barrier);
         cmd_buffer_frame_0.End();
         m_default_queue->Submit(cmd_buffer_frame_0, fence_frame_0);
     }
@@ -601,8 +600,8 @@ TEST_F(PositiveRayTracing, AccelerationStructuresReuseScratchMemory) {
         barrier.size = scratch_buffer_ci.size;
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vk::CmdPipelineBarrier(cmd_buffer_frame_1, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        cmd_buffer_frame_1.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, barrier);
         cmd_buffer_frame_1.End();
         m_default_queue->Submit(cmd_buffer_frame_1, fence_frame_1);
     }
@@ -649,8 +648,8 @@ TEST_F(PositiveRayTracing, AccelerationStructuresReuseScratchMemory) {
         barrier.size = scratch_buffer_ci.size;
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vk::CmdPipelineBarrier(cmd_buffer_frame_2, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        cmd_buffer_frame_2.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, barrier);
         cmd_buffer_frame_2.End();
         m_default_queue->Submit(cmd_buffer_frame_2, fence_frame_2);
     }
@@ -701,8 +700,8 @@ TEST_F(PositiveRayTracing, AccelerationStructuresDedicatedScratchMemory) {
         barrier.size = blas_vec_frame_0[0].GetScratchBuffer()->CreateInfo().size;
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vk::CmdPipelineBarrier(cmd_buffer_frame_0, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        cmd_buffer_frame_0.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, barrier);
         cmd_buffer_frame_0.End();
         m_default_queue->Submit(cmd_buffer_frame_0, fence_frame_0);
     }
@@ -723,8 +722,8 @@ TEST_F(PositiveRayTracing, AccelerationStructuresDedicatedScratchMemory) {
         barrier.size = blas_vec_frame_1[0].GetScratchBuffer()->CreateInfo().size;
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vk::CmdPipelineBarrier(cmd_buffer_frame_1, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        cmd_buffer_frame_1.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, barrier);
         cmd_buffer_frame_1.End();
         m_default_queue->Submit(cmd_buffer_frame_1, fence_frame_1);
     }
@@ -747,8 +746,8 @@ TEST_F(PositiveRayTracing, AccelerationStructuresDedicatedScratchMemory) {
         barrier.size = blas_vec_frame_2[0].GetScratchBuffer()->CreateInfo().size;
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vk::CmdPipelineBarrier(cmd_buffer_frame_2, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        cmd_buffer_frame_2.Barrier(VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                   VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, barrier);
         cmd_buffer_frame_2.End();
         m_default_queue->Submit(cmd_buffer_frame_2, fence_frame_2);
     }
@@ -1656,8 +1655,7 @@ TEST_F(PositiveRayTracing, ZeroPrimitiveCountWithIndexTypeNone) {
     m_device->Wait();
 }
 
-// https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10621
-TEST_F(PositiveRayTracing, DISABLED_CmdBuildPartitionedAccelerationStructuresNV) {
+TEST_F(PositiveRayTracing, CmdBuildPartitionedAccelerationStructuresNV) {
     TEST_DESCRIPTION("Test vkCmdBuildPartitionedAccelerationStructuresNV can build a partitioned TLAS");
 
     SetTargetApiVersion(VK_API_VERSION_1_3);
@@ -1734,7 +1732,7 @@ TEST_F(PositiveRayTracing, DISABLED_CmdBuildPartitionedAccelerationStructuresNV)
     ptlas_op.opType = VK_PARTITIONED_ACCELERATION_STRUCTURE_OP_TYPE_WRITE_PARTITION_TRANSLATION_NV;
     ptlas_op.argCount = partition_count;
     ptlas_op.argData.startAddress = write_partition_buffer_address;
-    ptlas_op.argData.strideInBytes = sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV);
+    ptlas_op.argData.strideInBytes = sizeof(VkPartitionedAccelerationStructureWritePartitionTranslationDataNV);
     ptlas_ops.push_back(ptlas_op);
 
     vkt::Buffer src_info_buffer(*m_device, partition_count * sizeof(VkBuildPartitionedAccelerationStructureIndirectCommandNV),
@@ -2214,7 +2212,7 @@ TEST_F(PositiveRayTracing, DescriptorHeap) {
     // Set shaders
 
     VkDescriptorSetAndBindingMappingEXT mapping =
-        MakeSetAndBindingMapping(0, 0, 1, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT);
+        MakeSetAndBindingMappingEXT(0, 0, 1, VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT);
     mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
     mapping.sourceData.constantOffset = {};
 

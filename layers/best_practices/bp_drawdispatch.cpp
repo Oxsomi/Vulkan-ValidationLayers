@@ -20,10 +20,7 @@
 #include "best_practices/best_practices_validation.h"
 #include "best_practices/bp_state.h"
 #include "state_tracker/buffer_state.h"
-#include "state_tracker/last_bound_state.h"
-#include "state_tracker/render_pass_state.h"
-#include "state_tracker/pipeline_state.h"
-#include <bitset>
+#include "utils/vk_api_utils.h"
 
 // Generic function to handle validation for all CmdDraw* type functions
 bool BestPractices::ValidateCmdDrawType(const bp_state::CommandBufferSubState& cb_state, const Location& loc) const {
@@ -128,11 +125,11 @@ bool BestPractices::PreCallValidateCmdDrawIndexed(VkCommandBuffer commandBuffer,
         (sub_state.small_indexed_draw_call_count == kMaxSmallIndexedDrawcalls - 1) &&
         (VendorCheckEnabled(kBPVendorArm) || VendorCheckEnabled(kBPVendorIMG))) {
         skip |= LogPerformanceWarning("BestPractices-vkCmdDrawIndexed-many-small-indexed-drawcalls", device, error_obj.location,
-                                      "%s %s: The command buffer contains many small indexed drawcalls "
+                                      "%s: The command buffer contains many small indexed drawcalls "
                                       "(at least %" PRIu32 " drawcalls with less than %" PRIu32
                                       " indices each). This may cause pipeline bubbles. "
                                       "You can try batching drawcalls or instancing when applicable.",
-                                      VendorSpecificTag(kBPVendorArm), VendorSpecificTag(kBPVendorIMG), kMaxSmallIndexedDrawcalls,
+                                      VendorSpecificTag(kBPVendorArm | kBPVendorIMG).c_str(), kMaxSmallIndexedDrawcalls,
                                       kSmallIndexedDrawcallIndices);
     }
 

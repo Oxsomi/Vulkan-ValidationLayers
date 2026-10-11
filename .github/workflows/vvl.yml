@@ -23,10 +23,25 @@ concurrency:
   cancel-in-progress: true
 
 on:
-    push:
-    pull_request:
-        branches:
-            - main
+  # allows fork-only wrapper workflows to invoke this
+  workflow_call:
+  workflow_dispatch:
+  # triggers individual PRs to get tested before merging
+  pull_request:
+    branches:
+      - main
+
+  schedule:
+    # We make a LOT of changes to VVL and sometimes with SKIP-CI and don't want them to run
+    # This will still check for us, but at a MUCH less frequent rate to save MANY CI minutes!
+    #
+    # From YEARS of doing this, these runs after merging are 99% a waste
+    # and when it is the 1% we fix it fast as we notice it locally.
+    #
+    # Not having a |push| (like |pull_request| above prevents doing it automatically on PR merging
+    #
+    # Runs at 00:00 UTC every Sunday
+    - cron: '0 0 * * 0'
 
 env:
   CMAKE_GENERATOR: Ninja
@@ -90,7 +105,14 @@ jobs:
         with:
           key: ${{ matrix.config }}-address-${{matrix.custom_hash_map}}
       - run: sudo apt-get -qq update && sudo apt-get install -y libwayland-dev xorg-dev xvfb
-      - run: python scripts/tests.py --build --config ${{ matrix.config }} --cmake='-DUSE_CUSTOM_HASH_MAP=${{matrix.custom_hash_map}}'
+      - name: Cache external dependencies
+        id: cache-deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/build-ci/external
+          key: linux-dependencies-${{ matrix.config }}-${{ hashfiles('scripts/known_good.json') }}
+      - run: python scripts/tests.py --build --config ${{ matrix.config }} --cmake='-DUSE_CUSTOM_HASH_MAP=${{matrix.custom_hash_map}} -DUPDATE_DEPS_SKIP_EXISTING_INSTALL=ON'
         env:
           CFLAGS: -fsanitize=address
           CXXFLAGS: -fsanitize=address
@@ -132,7 +154,14 @@ jobs:
         with:
           key: ${{ matrix.config }}-thread-${{matrix.custom_hash_map}}
       - run: sudo apt-get -qq update && sudo apt-get install -y libwayland-dev xorg-dev xvfb
-      - run: python scripts/tests.py --build --config ${{ matrix.config }} --cmake='-DUSE_CUSTOM_HASH_MAP=${{matrix.custom_hash_map}}'
+      - name: Cache external dependencies
+        id: cache-deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/build-ci/external
+          key: linux-tsan-dependencies-${{ matrix.config }}-${{ hashfiles('scripts/known_good.json') }}
+      - run: python scripts/tests.py --build --config ${{ matrix.config }} --cmake='-DUSE_CUSTOM_HASH_MAP=${{matrix.custom_hash_map}} -DUPDATE_DEPS_SKIP_EXISTING_INSTALL=ON'
         env:
           CFLAGS: -fsanitize=thread
           CXXFLAGS: -fsanitize=thread
@@ -164,7 +193,14 @@ jobs:
         with:
           key: linux-ubsan
       - run: sudo apt-get -qq update && sudo apt-get install -y libwayland-dev xorg-dev
-      - run: python scripts/tests.py --build --config debug --cmake='-DVVL_ENABLE_UBSAN=ON'
+      - name: Cache external dependencies
+        id: cache-deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/build-ci/external
+          key: linux-ubsan-dependencies-debug-${{ hashfiles('scripts/known_good.json') }}
+      - run: python scripts/tests.py --build --config debug --cmake='-DVVL_ENABLE_UBSAN=ON -DUPDATE_DEPS_SKIP_EXISTING_INSTALL=ON'
         env:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -189,7 +225,14 @@ jobs:
         with:
           key: linux_back_compat
       - run: sudo apt-get -qq update && sudo apt-get install -y libwayland-dev xorg-dev
-      - run: cmake -S . -B build/ -D UPDATE_DEPS=ON -D CMAKE_BUILD_TYPE=Debug
+      - name: Cache external dependencies
+        id: cache-deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/external
+          key: linux-backcompat-dependencies-debug-${{ hashfiles('scripts/known_good.json') }}
+      - run: cmake -S . -B build/ -D UPDATE_DEPS=ON -D CMAKE_BUILD_TYPE=Debug -D UPDATE_DEPS_SKIP_EXISTING_INSTALL=ON
         env:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -209,7 +252,14 @@ jobs:
         with:
           key: linux-upload-ccache
       - run: sudo apt-get -qq update && sudo apt-get install -y libwayland-dev xorg-dev
-      - run: cmake -S. -B build -D BUILD_WERROR=ON -D UPDATE_DEPS=ON -D CMAKE_BUILD_TYPE=Release
+      - name: Cache external dependencies
+        id: cache-deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/external
+          key: linux-upload-dependencies-release-${{ hashfiles('scripts/known_good.json') }}
+      - run: cmake -S. -B build -D BUILD_WERROR=ON -D UPDATE_DEPS=ON -D CMAKE_BUILD_TYPE=Release -D UPDATE_DEPS_SKIP_EXISTING_INSTALL=ON
       - run: cmake --build build
       - run: cmake --install build --prefix /tmp --strip
         env:
@@ -253,6 +303,10 @@ jobs:
     strategy:
       matrix:
         arch: [ amd64 ]
+    env:
+      # Exercises the multi-config generator path (Visual Studio, Xcode, Ninja Multi-Config),
+      # where switching Debug/Release/RelWithDebInfo must work from a single configure.
+      CMAKE_GENERATOR: Ninja Multi-Config
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -273,17 +327,26 @@ jobs:
             ${{ github.workspace }}/external/SPIRV-Tools/build/install
             ${{ github.workspace }}/external/Vulkan-Headers/build/install
             ${{ github.workspace }}/external/Vulkan-Utility-Libraries/build/install
-          key: windows-dependencies-${{ matrix.arch }}-${{ hashfiles('scripts/known_good.json') }}
-      - run: |
+            ${{ github.workspace }}/external/slang/install
+          key: windows-dependencies-multi-config-${{ matrix.arch }}-${{ hashfiles('scripts/known_good.json') }}
+      - name: Configure (once, for every --config used below)
+        run: |
          cmake -S. -B build `
          -D BUILD_WERROR=ON `
          -D UPDATE_DEPS=ON `
-         -D CMAKE_BUILD_TYPE=Debug `
          -D BUILD_TESTS=ON `
          -D UPDATE_DEPS_SKIP_EXISTING_INSTALL=ON `
          -D UPDATE_DEPS_DIR=${{ github.workspace }}/external
-      - run: cmake --build build
-      - run: cmake --install build --prefix ${{ github.workspace }}/install
+      - name: Build and install Debug without reconfiguring
+        run: |
+          # Only do Debug, release is done inside internal CI and this is really a "smoketest"
+          # BUILD_WERROR's link_options(/WX) turns any link warning (e.g. LNK4098, mismatched
+          # Debug/Release runtimes) into a build failure, so a non-zero exit here already covers it.
+          cmake --build build --config Debug
+          if ($LASTEXITCODE -ne 0) {
+            throw "cmake --build failed for Debug"
+          }
+          cmake --install build --config Debug --prefix ${{ github.workspace }}/install/Debug
 
   windowsUpload:
     needs: windows
@@ -309,6 +372,7 @@ jobs:
             ${{ github.workspace }}/external/SPIRV-Tools/build/install
             ${{ github.workspace }}/external/Vulkan-Headers/build/install
             ${{ github.workspace }}/external/Vulkan-Utility-Libraries/build/install
+            ${{ github.workspace }}/external/slang/install
           key: windows-dependencies-release-amd64-${{ hashfiles('scripts/known_good.json') }}
       - run: |
          cmake -S. -B build `
@@ -412,6 +476,13 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: iOS-cache
+      - name: Cache external dependencies
+        id: cache-deps
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/external
+          key: macos-dependencies-${{ hashfiles('scripts/known_good.json') }}
       - name: Configure for iOS
         run: |
           cmake -S . -B build/ \
@@ -419,6 +490,7 @@ jobs:
           -D CMAKE_OSX_ARCHITECTURES=arm64 \
           -D BUILD_WERROR=ON \
           -D UPDATE_DEPS=ON \
+          -D UPDATE_DEPS_SKIP_EXISTING_INSTALL=ON \
           -D CMAKE_BUILD_TYPE=Debug
         env:
           CMAKE_C_COMPILER_LAUNCHER: ccache

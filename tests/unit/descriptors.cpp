@@ -1050,8 +1050,7 @@ TEST_F(NegativeDescriptors, CmdBufferDescriptorSetImageSamplerDestroyed) {
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     barrier.subresourceRange.layerCount = 1;
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
-                           0, nullptr, 1, &barrier);
+    m_command_buffer.Barrier(barrier, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
     m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -1126,8 +1125,7 @@ TEST_F(NegativeDescriptors, CmdBufferDescriptorSetImageSamplerDestroyed) {
 
     // Transit image2 layout from VK_IMAGE_LAYOUT_UNDEFINED into VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     barrier.image = image2;
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
-                           0, nullptr, 1, &barrier);
+    m_command_buffer.Barrier(barrier, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
     m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -1345,14 +1343,12 @@ TEST_F(NegativeDescriptors, ImageDescriptorLayoutMismatch) {
             // record layout different than actual descriptor layout.
             const VkImageSubresourceRange range = image->SubresourceRange(aspect_mask);
             auto image_barrier = image->LayoutTransitionBarrier(VK_IMAGE_LAYOUT_UNDEFINED, image_layout, range);
-            vk::CmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, 0, nullptr,
-                                   0, nullptr, 1, &image_barrier);
+            cmd_buf.Barrier(image_barrier, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
 
             if (test_type == kExternal) {
                 // The image layout is external to the command buffer we are recording to test.  Submit to push to instance scope.
                 cmd_buf.End();
-                m_default_queue->Submit(cmd_buf);
-                m_default_queue->Wait();
+                m_default_queue->SubmitAndWait(cmd_buf);
                 cmd_buf.Begin();
             }
 
@@ -1383,8 +1379,7 @@ TEST_F(NegativeDescriptors, ImageDescriptorLayoutMismatch) {
                     m_errorMonitor->SetDesiredError(err);
                 }
             }
-            m_default_queue->Submit(cmd_buf);
-            m_default_queue->Wait();
+            m_default_queue->SubmitAndWait(cmd_buf);
             if (positive_test || (test_type == kInternal)) {
             } else {
                 m_errorMonitor->VerifyFound();
@@ -4330,12 +4325,17 @@ TEST_F(NegativeDescriptors, MutableDescriptorSetLayoutMissingFeature) {
 
 TEST_F(NegativeDescriptors, ImageSubresourceOverlapBetweenRenderPassAndDescriptorSets) {
     TEST_DESCRIPTION("Validate if attachments in render pass and descriptor set use the same image subresources");
+    SetTargetApiVersion(VK_API_VERSION_1_1);
     AddRequiredFeature(vkt::Feature::shaderStorageImageWriteWithoutFormat);
     AddRequiredFeature(vkt::Feature::fragmentStoresAndAtomics);
     RETURN_IF_SKIP(Init());
     InitRenderTarget();
 
     const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    if (!FormatFeatures2AreSupported(Gpu(), format, VK_IMAGE_TILING_OPTIMAL,
+                                     VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT)) {
+        GTEST_SKIP() << "Format doesn't support storage without format";
+    }
     RenderPassSingleSubpass rp(*this);
     rp.AddAttachmentDescription(format, VK_IMAGE_LAYOUT_UNDEFINED);
     rp.AddColorAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
@@ -5053,6 +5053,52 @@ TEST_F(NegativeDescriptors, DispatchWithUnboundSet) {
     m_errorMonitor->VerifyFound();
 }
 
+TEST_F(NegativeDescriptors, DisturbedSetPushConstantRanges) {
+    TEST_DESCRIPTION("https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/7307");
+    RETURN_IF_SKIP(Init());
+
+    char const* shader_source = R"glsl(
+        #version 460
+        layout(set = 0, binding = 0) buffer SSBO {
+            uint x;
+        } ssbo;
+
+        void main() {
+            ssbo.x = 1;
+        }
+    )glsl";
+
+    OneOffDescriptorSet descriptor_set_0(m_device, {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr}});
+    OneOffDescriptorSet descriptor_set_1(m_device, {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr}});
+    vkt::Buffer ssbo_buffer(*m_device, 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    descriptor_set_0.WriteDescriptorBufferInfo(0, ssbo_buffer, 0, VK_WHOLE_SIZE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    descriptor_set_0.UpdateDescriptorSets();
+    descriptor_set_1.WriteDescriptorBufferInfo(0, ssbo_buffer, 0, VK_WHOLE_SIZE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    descriptor_set_1.UpdateDescriptorSets();
+
+    // different push constant ranges
+    const vkt::PipelineLayout pipeline_layout_a(*m_device, {&descriptor_set_0.layout_, &descriptor_set_1.layout_});
+    VkPushConstantRange pc_range = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    const vkt::PipelineLayout pipeline_layout_b(*m_device, {&descriptor_set_0.layout_, &descriptor_set_1.layout_}, {pc_range});
+
+    CreateComputePipelineHelper pipe(*this);
+    pipe.cs_ = VkShaderObj(*m_device, shader_source, VK_SHADER_STAGE_COMPUTE_BIT);
+    pipe.cp_ci_.layout = pipeline_layout_b;
+    pipe.CreateComputePipeline();
+
+    VkDescriptorSet sets[2] = {descriptor_set_0.set_, descriptor_set_1.set_};
+
+    m_command_buffer.Begin();
+    vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_a, 0u, 2u, sets, 0u, nullptr);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_b, 1u, 1u, &descriptor_set_1.set_,
+                              0u, nullptr);
+    m_errorMonitor->SetDesiredError("VUID-vkCmdDispatch-None-08600");
+    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
 TEST_F(NegativeDescriptors, CompatiblePushConstantRanges) {
     RETURN_IF_SKIP(Init());
 
@@ -5519,7 +5565,8 @@ TEST_F(NegativeDescriptors, MaxInlineUniformTotalSize) {
     pipeline_layout_ci.pSetLayouts = &set_layout.handle();
 
     VkPipelineLayout pipeline_layout;
-    if (binding_count > inline_uniform_block_properties.maxDescriptorSetUpdateAfterBindInlineUniformBlocks) {
+    if (binding_count > inline_uniform_block_properties.maxDescriptorSetUpdateAfterBindInlineUniformBlocks &&
+        binding_count > inline_uniform_block_properties.maxDescriptorSetInlineUniformBlocks) {
         m_errorMonitor->SetDesiredError("VUID-VkPipelineLayoutCreateInfo-descriptorType-02217");
     }
     if (binding_count / 5 > inline_uniform_block_properties.maxPerStageDescriptorInlineUniformBlocks) {
@@ -5622,6 +5669,64 @@ TEST_F(NegativeDescriptors, PushDescriptorWithoutInfo) {
     vk::CmdPushDescriptorSetKHR(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u, &descriptor_write);
     m_errorMonitor->VerifyFound();
     m_command_buffer.End();
+}
+
+TEST_F(NegativeDescriptors, DescriptorSetLayoutSupport) {
+    TEST_DESCRIPTION("https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/11861");
+    SetTargetApiVersion(VK_API_VERSION_1_1);
+    RETURN_IF_SKIP(Init());
+
+    VkPhysicalDeviceMaintenance3Properties maintenance3_props = vku::InitStructHelper();
+    VkPhysicalDeviceProperties2 props2 = vku::InitStructHelper(&maintenance3_props);
+    vk::GetPhysicalDeviceProperties2(Gpu(), &props2);
+
+    const uint32_t descriptor_count = (maintenance3_props.maxPerSetDescriptors / 2) + 1;
+    const VkDescriptorSetLayoutBinding bindings[2] = {
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, descriptor_count, VK_SHADER_STAGE_ALL, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, descriptor_count, VK_SHADER_STAGE_ALL, nullptr}};
+
+    VkDescriptorSetLayoutCreateInfo ds_layout_ci = vku::InitStructHelper();
+    ds_layout_ci.bindingCount = 2;
+    ds_layout_ci.pBindings = bindings;
+
+    VkDescriptorSetLayoutSupport support = vku::InitStructHelper();
+    vk::GetDescriptorSetLayoutSupport(device(), &ds_layout_ci, &support);
+    if (support.supported) {
+        GTEST_SKIP() << "Implementation supports a descriptor set layout over maxPerSetDescriptors";
+    }
+
+    m_errorMonitor->SetDesiredError("VUID-vkCreateDescriptorSetLayout-support-09582");
+    vkt::DescriptorSetLayout ds_layout(*m_device, ds_layout_ci);
+    m_errorMonitor->VerifyFound();
+}
+
+TEST_F(NegativeDescriptors, DescriptorSetLayoutSupportMutable) {
+    TEST_DESCRIPTION("https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/11861");
+    SetTargetApiVersion(VK_API_VERSION_1_1);
+    AddRequiredExtensions(VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::mutableDescriptorType);
+    RETURN_IF_SKIP(Init());
+
+    VkDescriptorType descriptor_types[2] = {VK_DESCRIPTOR_TYPE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    VkMutableDescriptorTypeListEXT type_list = {2, descriptor_types};
+    VkMutableDescriptorTypeCreateInfoEXT mutable_ci = vku::InitStructHelper();
+    mutable_ci.mutableDescriptorTypeListCount = 1;
+    mutable_ci.pMutableDescriptorTypeLists = &type_list;
+
+    const VkDescriptorSetLayoutBinding binding = {0, VK_DESCRIPTOR_TYPE_MUTABLE_EXT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo ds_layout_ci = vku::InitStructHelper(&mutable_ci);
+    ds_layout_ci.bindingCount = 1;
+    ds_layout_ci.pBindings = &binding;
+
+    VkDescriptorSetLayoutSupport support = vku::InitStructHelper();
+    vk::GetDescriptorSetLayoutSupport(device(), &ds_layout_ci, &support);
+    if (support.supported) {
+        GTEST_SKIP() << "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER is supported as a mutable descriptor type";
+    }
+
+    m_errorMonitor->SetDesiredError("VUID-vkCreateDescriptorSetLayout-support-09582");
+    vkt::DescriptorSetLayout ds_layout(*m_device, ds_layout_ci);
+    m_errorMonitor->VerifyFound();
 }
 
 TEST_F(NegativeDescriptors, GetSupportMutableDescriptorType) {
@@ -6347,6 +6452,26 @@ TEST_F(NegativeDescriptors, ImmutableSamplerIdenticallyDefinedFilterMinmax) {
                               0, nullptr);
     m_errorMonitor->SetDesiredError("VUID-vkCmdDispatch-None-08600");
     vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeDescriptors, DynamicOffsetRangeCoversWholeBuffer) {
+    TEST_DESCRIPTION("https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/8650");
+    RETURN_IF_SKIP(Init());
+
+    OneOffDescriptorSet descriptor_set(m_device, {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_ALL, nullptr}});
+    const vkt::PipelineLayout pipeline_layout(*m_device, {&descriptor_set.layout_});
+
+    vkt::Buffer buffer(*m_device, 2048, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    descriptor_set.WriteDescriptorBufferInfo(0, buffer, 0, 2048, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC);
+    descriptor_set.UpdateDescriptorSets();
+
+    m_command_buffer.Begin();
+    uint32_t dynamic_offset = static_cast<uint32_t>(m_device->Physical().limits_.minStorageBufferOffsetAlignment);
+    m_errorMonitor->SetDesiredError("VUID-vkCmdBindDescriptorSets-pDescriptorSets-01979");
+    vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_set.set_, 1,
+                              &dynamic_offset);
     m_errorMonitor->VerifyFound();
     m_command_buffer.End();
 }

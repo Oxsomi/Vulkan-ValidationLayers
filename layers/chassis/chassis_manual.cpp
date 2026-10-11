@@ -93,7 +93,7 @@ void OutputLayerStatusInfo(vvl::DispatchInstance* context, const Location& loc) 
 
     std::ostringstream ss;
     const auto& settings = context->settings;
-    ss << "Current Validaiton Enabled:\n";
+    ss << "Current Validation Enabled:\n";
 
     // Match the order in vkconfig
     // The goal here is to not print ALL the settings, just which parts of validation are turned on
@@ -137,10 +137,12 @@ const vvl::unordered_map<std::string, function_data>& GetNameToFuncPtrMap();
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL GetDeviceProcAddr(VkDevice device, const char* funcName) {
     auto layer_data = vvl::GetDispatchDevice(device);
-    if (!ApiParentExtensionEnabled(funcName, &layer_data->extensions)) {
+    // Both maps are keyed by std::string, build it once instead of once per lookup
+    const std::string name(funcName);
+    if (!ApiParentExtensionEnabled(name, &layer_data->extensions)) {
         return nullptr;
     }
-    const auto& item = GetNameToFuncPtrMap().find(funcName);
+    const auto& item = GetNameToFuncPtrMap().find(name);
     if (item != GetNameToFuncPtrMap().end()) {
         if (item->second.function_type != kFuncTypeDev) {
             Location loc(vvl::Func::vkGetDeviceProcAddr);
@@ -201,7 +203,11 @@ void ApplicationAtExit() {
 
 VKAPI_ATTR VkResult VKAPI_CALL CreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator,
                                               VkInstance* pInstance) {
-    atexit(ApplicationAtExit);
+    // Only register once for the entire process.
+    // If called every instance, any app (likley test suite) that keeps calling vkCreateInstance many times in a single process is
+    // just adding this to the C library's exit table and never gets removed until the process ends
+    static const bool at_exit_registered = (atexit(ApplicationAtExit), true);
+    (void)at_exit_registered;
 
     VVL_ZoneScoped;
     VkLayerInstanceCreateInfo* chain_info = GetChainInfo(pCreateInfo, VK_LAYER_LINK_INFO);
@@ -646,51 +652,6 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateComputePipelines(VkDevice device, VkPipelin
             vo->PostCallRecordCreateComputePipelines(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines,
                                                      record_obj, pipeline_states, chassis_state);
         }
-    }
-    return result;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL CreateRayTracingPipelinesNV(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
-                                                           const VkRayTracingPipelineCreateInfoNV* pCreateInfos,
-                                                           const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines) {
-    auto device_dispatch = vvl::GetDispatchDevice(device);
-    bool skip = false;
-    ErrorObject error_obj(vvl::Func::vkCreateRayTracingPipelinesNV, VulkanTypedHandle(device, kVulkanObjectTypeDevice));
-
-    PipelineStates pipeline_states;
-
-    for (const auto& vo : device_dispatch->object_dispatch) {
-        if (!vo) {
-            continue;
-        }
-        auto lock = vo->ReadLock();
-        skip |= vo->PreCallValidateCreateRayTracingPipelinesNV(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator,
-                                                               pPipelines, error_obj, pipeline_states);
-        if (skip) return VK_ERROR_VALIDATION_FAILED_EXT;
-    }
-
-    RecordObject record_obj(vvl::Func::vkCreateRayTracingPipelinesNV);
-    for (auto& vo : device_dispatch->object_dispatch) {
-        if (!vo) {
-            continue;
-        }
-        auto lock = vo->WriteLock();
-        vo->PreCallRecordCreateRayTracingPipelinesNV(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines,
-                                                     record_obj, pipeline_states);
-    }
-
-    VkResult result;
-    result =
-        device_dispatch->CreateRayTracingPipelinesNV(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
-    record_obj.result = result;
-
-    for (auto& vo : device_dispatch->object_dispatch) {
-        if (!vo) {
-            continue;
-        }
-        auto lock = vo->WriteLock();
-        vo->PostCallRecordCreateRayTracingPipelinesNV(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines,
-                                                      record_obj, pipeline_states);
     }
     return result;
 }
@@ -1154,8 +1115,7 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateBuffer(VkDevice device, const VkBufferCreat
                 continue;
             }
             auto lock = vo->WriteLock();
-            // If we don't pass into PostCallRecord, CoreCheck may give false positives when using GPU-AV
-            vo->PostCallRecordCreateBuffer(device, chassis_state.create_info_copy, pAllocator, pBuffer, record_obj);
+            vo->PostCallRecordCreateBuffer(device, pCreateInfo, pAllocator, pBuffer, record_obj);
         }
     }
     return result;
@@ -1284,6 +1244,12 @@ VKAPI_ATTR VkResult VKAPI_CALL BeginCommandBuffer(VkCommandBuffer commandBuffer,
 
 // Handle tooling queries manually as this is a request for layer information
 static const VkPhysicalDeviceToolPropertiesEXT khronos_layer_tool_props = {
+    // https://gitlab.khronos.org/vulkan/vulkan/-/issues/4924
+    // We currently override the sType/pNext here but due to
+    //    VUID-VkPhysicalDeviceToolProperties-sType-sType
+    // and
+    //   VUID-VkPhysicalDeviceToolProperties-pNext-pNext
+    // we assume it is safe to just override as nothing extend these (and its simpler logic for us)
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TOOL_PROPERTIES_EXT,
     nullptr,
     "Khronos Validation Layer",
@@ -1486,4 +1452,5 @@ VKAPI_ATTR VkResult VKAPI_CALL GetValidationCacheDataEXT(VkDevice device, VkVali
     }
     return VK_SUCCESS;
 }
+
 }  // namespace vulkan_layer_chassis

@@ -43,7 +43,7 @@ const char* unimplementable_validation[] = {
 
     // These VUIDs cannot be validated beyond making sure the pointer is not null
     "VUID-VkMemoryToImageCopy-pHostPointer-09061",
-    "VUID-VkImageToMemoryCopy-pHostPointer-09066"
+    "VUID-VkImageToMemoryCopy-pHostPointer-09066",
 
     // these are already taken care in spirv-val for 08737
     "VUID-VkShaderModuleCreateInfo-pCode-08736",
@@ -82,7 +82,7 @@ const char* unimplementable_validation[] = {
     "VUID-vkEnumerateInstanceExtensionProperties-pPropertyCount-parameter",
     // These are implemented, but can't test as the loader will fail out first
     "VUID-VkInstanceCreateInfo-ppEnabledLayerNames-parameter",
-    "VUID-VkInstanceCreateInfo-ppEnabledExtensionNames-parameter"
+    "VUID-VkInstanceCreateInfo-ppEnabledExtensionNames-parameter",
 
     // Caches are called between application runs so there is no way for a layer to track this information
     "VUID-VkPipelineCacheCreateInfo-initialDataSize-00768",
@@ -299,7 +299,7 @@ const char* unimplementable_validation[] = {
     "VUID-vkGetDeviceFaultInfoEXT-pFaultCounts-07338",
     "VUID-vkGetDeviceFaultInfoEXT-pFaultCounts-07339",
     "VUID-VkRenderingInputAttachmentIndexInfo-pDepthInputAttachmentIndex-parameter",
-    "VUID-VkRenderingInputAttachmentIndexInfo-pStencilInputAttachmentIndex-parameter"
+    "VUID-VkRenderingInputAttachmentIndexInfo-pStencilInputAttachmentIndex-parameter",
 
     // These VUs have "is not NULL it must be a pointer to a valid pointer to valid structure" language
     // There is no actual way to validate thsese
@@ -423,6 +423,7 @@ const char* unimplementable_validation[] = {
     "VUID-vkEnumerateDeviceLayerProperties-pProperties-parameter",
     "VUID-vkEnumerateInstanceExtensionProperties-pProperties-parameter",
     "VUID-vkEnumerateInstanceLayerProperties-pProperties-parameter",
+    "VUID-vkGetPhysicalDeviceCooperativeMatrixProperties2EXT-pProperties-parameter",
     // Checking for null-terminated UTF-8 string
     "VUID-VkApplicationInfo-pApplicationName-parameter",
     "VUID-VkApplicationInfo-pEngineName-parameter",
@@ -693,7 +694,7 @@ const char* unimplementable_validation[] = {
     "VUID-VkPhysicalDeviceOpacityMicromapPropertiesKHR-sType-sType",
 
     // Needs to be correct for VVL to even know about the struct
-    "VUID-VkLayerSettingsCreateInfoEXT-sType-sType"
+    "VUID-VkLayerSettingsCreateInfoEXT-sType-sType",
 
     // Points to Video struts not defined
     "VUID-VkVideoDecodeAV1InlineSessionParametersInfoKHR-pStdSequenceHeader-parameter",
@@ -706,7 +707,7 @@ const char* unimplementable_validation[] = {
     "VUID-VkVideoEncodeAV1SessionParametersCreateInfoKHR-pStdOperatingPoints-parameter",
 
     // Acceleration structure replay related,
-    // but VVL has no way of tracking needed info (typically stored offline)
+    // VVL would need to track AS state outside of the application, impossible
     "VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09488"
     "VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09489"
     "VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09490"
@@ -733,12 +734,6 @@ const char* unimplementable_validation[] = {
     // how rays behaves in the scene
     "VUID-vkCmdSetRayTracingPipelineStackSizeKHR-pipelineStackSize-03610",
 
-    // Those VUs are related to replaying AS.
-    // VVL would need to track AS state outside of the application, impossible
-    "VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09488",
-    "VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09489",
-    "VUID-VkAccelerationStructureCreateInfoKHR-deviceAddress-09490",
-
     // Currently ALL BuiltIn in SPIR-V are only for Vulkan
     "VUID-StandaloneSpirv-BuiltIn-04668",
 
@@ -748,6 +743,38 @@ const char* unimplementable_validation[] = {
 
     // This is caught by VUID-VkPipelineShaderStageCreateInfo-stage-parameter
     "VUID-VkPipelineShaderStageCreateInfo-stage-00706",
+
+    // VVL has a file descriptor or a `HANDLE` and no way to interrogate what is behind it
+    // The following are the various external memory/sync issues
+    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/5431
+    //
+    // "must obey any requirements listed for handleType in external ... handle types compatibility"
+    "VkImportMemoryFdInfoKHR-fd-01520",
+    "VkImportFenceFdInfoKHR-fd-01541",
+    "VkImportMemoryWin32HandleInfoKHR-name-01519",
+    "VkImportSemaphoreWin32HandleInfoKHR-name-01543",
+    "VkImportFenceWin32HandleInfoKHR-name-01540",
+    "VkImportSemaphoreFdInfoKHR-fd-01544",
+    "VkImportMemoryWin32HandleInfoKHR-handle-01518",
+    "VkImportSemaphoreWin32HandleInfoKHR-handle-01542",
+    "VkImportFenceWin32HandleInfoKHR-handle-01539",
+    // "must have been created on the same underlying physical device / compatible driver"
+    "VkImportMemoryFdInfoKHR-fd-00668",
+    "VkImportMemoryFdInfoKHR-fd-01746",
+    "VkMemoryAllocateInfo-None-00643",
+    "VkMemoryAllocateInfo-None-00644",
+    // "the value of memoryTypeIndex must be one of those returned by vkGetMemoryFdPropertiesKHR
+    // allocationSize must match the size of the D3D12 heap"
+    "VkMemoryAllocateInfo-memoryTypeIndex-00648",
+    "VkMemoryAllocateInfo-allocationSize-00647",
+    // VVL would have to have observed the corresponding query and correlated it with this fd,
+    // which it cannot do for an fd created outside Vulkan.
+    // "pHostPointer must be a pointer to N bytes of host memory / host mapped foreign memory"
+    "VkImportMemoryHostPointerInfoEXT-handleType-01750",
+    "VkImportMemoryHostPointerInfoEXT-handleType-01751",
+    // Cannot validate a raw pointer
+    "vkGetMemoryHostPointerPropertiesEXT-handleType-01754",
+    "vkGetMemoryHostPointerPropertiesEXT-handleType-01755",
 
     // We use to have these implemented until we found out (from the issue below) that these were giving false positives.
     // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/11900
@@ -790,19 +817,6 @@ const char* not_going_to_do[] = {
     "VUID-vkBindImageMemory-apiVersion-07921",
     "VUID-VkBindImageMemoryInfo-apiVersion-07921",
 
-    // We tried to add these a while ago, it had constant false positives
-    // The issue is we can't actually determine the size of the image as that is an opaque object
-    // Trying to do this is only going to lead to more bad false positives
-    "VUID-VkCopyBufferToImageInfo2-pRegions-04565",
-    "VUID-VkCopyBufferToImageInfo2KHR-pRegions-04554",
-    "VUID-VkCopyImageToBufferInfo2-pRegions-04566",
-    "VUID-VkCopyImageToBufferInfo2KHR-pRegions-04557",
-    "VUID-VkImageToMemoryCopy-pRegions-09067",
-    "VUID-VkMemoryToImageCopy-pRegions-09062",
-    "VUID-VkResolveImageInfo2-pRegions-00255",
-    "VUID-vkCmdResolveImage-pRegions-00255",
-    "VUID-VkCopyDeviceMemoryImageInfoKHR-addressRange-13027",
-
     // Adding a bunch of generated code to check crazy edge cases for an extension that was only ever added to
     // layer OpenGL ES on Vulkan is not worth it
     "VUID-VkSamplerCreateInfo-borderColor-04442",
@@ -830,7 +844,7 @@ const char* not_going_to_do[] = {
 
     // This should be a single VU as
     // VUID-RuntimeSpirv-imageDescriptorAlignment-11349
-    // already cover imageDescriptorAlignment, but there is a seperate VU
+    // already cover imageDescriptorAlignment, but there is a separate VU
     // for atomic storage images.
     // Instead of wasting effort/memory tracking that, we just combine the VU
     "VUID-RuntimeSpirv-imageDescriptorAlignment-11383",
@@ -846,11 +860,30 @@ const char* not_going_to_do[] = {
     // This falls under the failure of the sparse memory spec/testing
     // so going to skip until someone complains loudly
     "VUID-vkCmdDraw-None-08119",
+
+    // https://gitlab.khronos.org/vulkan/vulkan/-/work_items/4965
+    // Apparently some ARM devices support no clip/cull and guarded by the
+    // shaderClipDistance/shaderCullDistance features such that these are not possible to even hit
+    // This whole thing is an issue because glslang adds the Clip/Cull to the gl_vertex output struct
+    // but only if you use it does it use the OpCapabilty
+    // ... so these are just here because of the decision of glslang years ago
+    "VUID-RuntimeSpirv-maxClipDistances-08448",
+    "VUID-RuntimeSpirv-maxCullDistances-08449",
+
+    // Sync Val already covers these, just without an explicit VU
+    // I decided to not try and remove these from the spec (but they should be)
+    "VUID-vkCmdExecuteCommands-commandBuffer-06533",
+    "VUID-vkCmdExecuteCommands-commandBuffer-06534",
+    "VUID-vkCmdExecuteCommands-pCommandBuffers-06535",
+    "VUID-vkCmdExecuteCommands-pCommandBuffers-06536",
 };
 
 // VUs from deprecated extensions that would require complex codegen to get working
 const char* deprecated_validation[] = {
     // NV Ray tracing that is now KHR ray tracing
+    // In Oct 2026 we got permission from NVIDIA to remove VK_NV_ray_tracing validation
+    // as there should be no more active developing for it to need validation.
+    // This also greatly reduces lots of old code that is not being used/tested
     "VUID-VkAccelerationStructureCreateInfoNV-info-parameter",
     "VUID-VkAccelerationStructureInfoNV-type-parameter",
     "VUID-VkAccelerationStructureMotionInstanceNV-flags-zerobitmask",
@@ -885,6 +918,132 @@ const char* deprecated_validation[] = {
     "VUID-RuntimeSpirv-OpHitObjectTraceRayNV-07714",
     "VUID-RuntimeSpirv-OpHitObjectTraceRayNV-07715",
     "VUID-RuntimeSpirv-OpHitObjectTraceRayNV-07716",
+    "VUID-VkAccelerationStructureCaptureDescriptorDataInfoEXT-accelerationStructureNV-08092",
+    "VUID-VkAccelerationStructureCaptureDescriptorDataInfoEXT-accelerationStructureNV-08094",
+    "VUID-VkAccelerationStructureCreateInfoNV-compactedSize-02421",
+    "VUID-VkAccelerationStructureInfoNV-flags-02592",
+    "VUID-VkAccelerationStructureInfoNV-geometryCount-02422",
+    "VUID-VkAccelerationStructureInfoNV-instanceCount-02423",
+    "VUID-VkAccelerationStructureInfoNV-instanceData-02782",
+    "VUID-VkAccelerationStructureInfoNV-maxTriangleCount-02424",
+    "VUID-VkAccelerationStructureInfoNV-scratch-02781",
+    "VUID-VkAccelerationStructureInfoNV-type-02425",
+    "VUID-VkAccelerationStructureInfoNV-type-02426",
+    "VUID-VkAccelerationStructureInfoNV-type-02786",
+    "VUID-VkAccelerationStructureInfoNV-type-04623",
+    "VUID-VkBindAccelerationStructureMemoryInfoNV-accelerationStructure-03620",
+    "VUID-VkBindAccelerationStructureMemoryInfoNV-memory-03622",
+    "VUID-VkBindAccelerationStructureMemoryInfoNV-memoryOffset-03621",
+    "VUID-VkBindAccelerationStructureMemoryInfoNV-memoryOffset-03623",
+    "VUID-VkBindAccelerationStructureMemoryInfoNV-size-03624",
+    "VUID-vkCmdBeginQueryIndexedEXT-queryType-04729",
+    "VUID-vkCmdBeginQuery-queryType-04729",
+    "VUID-vkCmdBuildAccelerationStructureNV-dst-02488",
+    "VUID-vkCmdBuildAccelerationStructureNV-dst-07787",
+    "VUID-vkCmdBuildAccelerationStructureNV-geometryCount-02241",
+    "VUID-vkCmdBuildAccelerationStructureNV-update-02489",
+    "VUID-vkCmdBuildAccelerationStructureNV-update-02490",
+    "VUID-vkCmdBuildAccelerationStructureNV-update-02491",
+    "VUID-vkCmdBuildAccelerationStructureNV-update-02492",
+    "VUID-vkCmdCopyAccelerationStructureNV-buffer-03718",
+    "VUID-vkCmdCopyAccelerationStructureNV-buffer-03719",
+    "VUID-vkCmdCopyAccelerationStructureNV-mode-03410",
+    "VUID-vkCmdCopyAccelerationStructureNV-src-03411",
+    "VUID-vkCmdTraceRaysNV-callableShaderBindingOffset-02461",
+    "VUID-vkCmdTraceRaysNV-callableShaderBindingOffset-02462",
+    "VUID-vkCmdTraceRaysNV-callableShaderBindingStride-02465",
+    "VUID-vkCmdTraceRaysNV-callableShaderBindingStride-02468",
+    "VUID-vkCmdTraceRaysNV-depth-02471",
+    "VUID-vkCmdTraceRaysNV-height-02470",
+    "VUID-vkCmdTraceRaysNV-hitShaderBindingOffset-02459",
+    "VUID-vkCmdTraceRaysNV-hitShaderBindingOffset-02460",
+    "VUID-vkCmdTraceRaysNV-hitShaderBindingStride-02464",
+    "VUID-vkCmdTraceRaysNV-hitShaderBindingStride-02467",
+    "VUID-vkCmdTraceRaysNV-missShaderBindingOffset-02457",
+    "VUID-vkCmdTraceRaysNV-missShaderBindingOffset-02458",
+    "VUID-vkCmdTraceRaysNV-missShaderBindingStride-02463",
+    "VUID-vkCmdTraceRaysNV-missShaderBindingStride-02466",
+    "VUID-vkCmdTraceRaysNV-raygenShaderBindingOffset-02455",
+    "VUID-vkCmdTraceRaysNV-raygenShaderBindingOffset-02456",
+    "VUID-vkCmdTraceRaysNV-width-02469",
+    "VUID-vkCmdWriteAccelerationStructuresPropertiesNV-pAccelerationStructures-06215",
+    "VUID-vkCmdWriteAccelerationStructuresPropertiesNV-queryPool-03755",
+    "VUID-vkCmdWriteAccelerationStructuresPropertiesNV-queryType-06216",
+    "VUID-vkCreateRayTracingPipelinesNV-binaryCount-09620",
+    "VUID-vkCreateRayTracingPipelinesNV-binaryCount-09621",
+    "VUID-vkCreateRayTracingPipelinesNV-binaryCount-09622",
+    "VUID-vkCreateRayTracingPipelinesNV-device-09677",
+    "VUID-vkCreateRayTracingPipelinesNV-flags-03415",
+    "VUID-vkCreateRayTracingPipelinesNV-flags-03416",
+    "VUID-vkCreateRayTracingPipelinesNV-flags-03816",
+    "VUID-vkCreateRayTracingPipelinesNV-pCreateInfos-11414",
+    "VUID-vkCreateRayTracingPipelinesNV-pCreateInfos-11429",
+    "VUID-vkCreateRayTracingPipelinesNV-pNext-09616",
+    "VUID-vkCreateRayTracingPipelinesNV-pNext-09617",
+    "VUID-VkDescriptorDataEXT-type-08042",
+    "VUID-VkDescriptorGetInfoEXT-type-08029",
+    "VUID-vkDestroyAccelerationStructureNV-accelerationStructure-03752",
+    "VUID-VkGeometryAABBNV-offset-02439",
+    "VUID-VkGeometryAABBNV-offset-02440",
+    "VUID-VkGeometryAABBNV-stride-02441",
+    "VUID-VkGeometryNV-geometryType-03503",
+    "VUID-VkGeometryTrianglesNV-indexCount-02436",
+    "VUID-VkGeometryTrianglesNV-indexData-02434",
+    "VUID-VkGeometryTrianglesNV-indexOffset-02431",
+    "VUID-VkGeometryTrianglesNV-indexOffset-02432",
+    "VUID-VkGeometryTrianglesNV-indexType-02433",
+    "VUID-VkGeometryTrianglesNV-transformOffset-02437",
+    "VUID-VkGeometryTrianglesNV-transformOffset-02438",
+    "VUID-VkGeometryTrianglesNV-vertexFormat-02430",
+    "VUID-VkGeometryTrianglesNV-vertexOffset-02428",
+    "VUID-VkGeometryTrianglesNV-vertexOffset-02429",
+    "VUID-vkGetAccelerationStructureHandleNV-accelerationStructure-02787",
+    "VUID-vkGetAccelerationStructureHandleNV-dataSize-02240",
+    "VUID-VkPipelineLayoutCreateInfo-descriptorType-02381",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-02904",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-02957",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03456",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03458",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03459",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03460",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03461",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03462",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03463",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-03588",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-04948",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-07369",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-07985",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-07986",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-11008",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-11311",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-11312",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-11798",
+    "VUID-VkRayTracingPipelineCreateInfoNV-flags-12341",
+    "VUID-VkRayTracingPipelineCreateInfoNV-layout-07987",
+    "VUID-VkRayTracingPipelineCreateInfoNV-layout-07988",
+    "VUID-VkRayTracingPipelineCreateInfoNV-layout-07990",
+    "VUID-VkRayTracingPipelineCreateInfoNV-layout-07991",
+    "VUID-VkRayTracingPipelineCreateInfoNV-layout-10069",
+    "VUID-VkRayTracingPipelineCreateInfoNV-layout-12402",
+    "VUID-VkRayTracingPipelineCreateInfoNV-maxRecursionDepth-03457",
+    "VUID-VkRayTracingPipelineCreateInfoNV-None-09497",
+    "VUID-VkRayTracingPipelineCreateInfoNV-None-10391",
+    "VUID-VkRayTracingPipelineCreateInfoNV-None-11368",
+    "VUID-VkRayTracingPipelineCreateInfoNV-pipelineCreationCacheControl-02878",
+    "VUID-VkRayTracingPipelineCreateInfoNV-pipelineProtectedAccess-07368",
+    "VUID-VkRayTracingPipelineCreateInfoNV-pipelineStageCreationFeedbackCount-06651",
+    "VUID-VkRayTracingPipelineCreateInfoNV-stage-06232",
+    "VUID-VkRayTracingShaderGroupCreateInfoNV-anyHitShader-02418",
+    "VUID-VkRayTracingShaderGroupCreateInfoNV-closestHitShader-02417",
+    "VUID-VkRayTracingShaderGroupCreateInfoNV-type-02413",
+    "VUID-VkRayTracingShaderGroupCreateInfoNV-type-02414",
+    "VUID-VkRayTracingShaderGroupCreateInfoNV-type-02415",
+    "VUID-VkRayTracingShaderGroupCreateInfoNV-type-02416",
+    "VUID-VkResourceDescriptorInfoEXT-type-11468",
+    "VUID-vkUpdateDescriptorSets-pDescriptorWrites-06241",
+    "VUID-VkWriteDescriptorSetAccelerationStructureNV-pAccelerationStructures-03748",
+    "VUID-VkWriteDescriptorSetAccelerationStructureNV-pAccelerationStructures-03749",
+    "VUID-VkWriteDescriptorSet-descriptorType-03817",
 
     // No one wants to own VK_EXT_opacity_micromap with the KHR coming out
     // ... sad
@@ -894,6 +1053,11 @@ const char* deprecated_validation[] = {
     "VUID-VkDescriptorSetLayoutCreateInfo-flags-09463",
     "VUID-VkDescriptorSetLayoutCreateInfo-flags-09464",
     "VUID-VkDescriptorSetLayoutBinding-flags-09466",
+
+    // The work for this was prototyped and its a lot for a check that is likely not neeed
+    // TransformFeedback has been legacy for awhile and will only add if someone ACTUALLY needs these
+    "VUID-VkGraphicsPipelineCreateInfo-rasterizationStream-02319",
+    "VUID-VkGraphicsPipelineCreateInfo-rasterizationStream-02320",
 };
 
 // clang-format on

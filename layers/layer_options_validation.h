@@ -72,6 +72,7 @@ static void ValidateLayerSettingsProvided(const VkLayerSettingsCreateInfoEXT &la
         else if (strcmp(VK_LAYER_GPUAV_DEBUG_DUMP_INSTRUMENTED_SHADERS, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_GPUAV_DEBUG_MAX_INSTRUMENTATIONS_COUNT, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_UINT32_EXT; }
         else if (strcmp(VK_LAYER_GPUAV_DEBUG_PRINT_INSTRUMENTATION_INFO, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
+        else if (strcmp(VK_LAYER_GPUAV_DEBUG_TEST_LOWER_LIMITS, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_GPUAV_DEBUG_VALIDATE_INSTRUMENTED_SHADERS, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_GPUAV_DESCRIPTOR_CHECKS, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_GPUAV_ENABLE, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
@@ -106,8 +107,10 @@ static void ValidateLayerSettingsProvided(const VkLayerSettingsCreateInfoEXT &la
         else if (strcmp(VK_LAYER_PRINTF_VERBOSE, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_REPORT_FLAGS, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_STRING_EXT; }
         else if (strcmp(VK_LAYER_STATELESS_PARAM, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
+        else if (strcmp(VK_LAYER_SYNCVAL_FULL_VALIDATION, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_SYNCVAL_LOAD_OP_AFTER_STORE_OP_VALIDATION, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_SYNCVAL_MESSAGE_EXTRA_PROPERTIES, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
+        else if (strcmp(VK_LAYER_SYNCVAL_RECORD_TIME_VALIDATION, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_SYNCVAL_SHADER_ACCESSES_HEURISTIC, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }
         else if (strcmp(VK_LAYER_THREAD_SAFETY, name) == 0) { required_type = VK_LAYER_SETTING_TYPE_BOOL32_EXT; }

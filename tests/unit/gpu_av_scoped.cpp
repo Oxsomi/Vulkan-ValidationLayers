@@ -350,6 +350,57 @@ TEST_F(NegativeGpuAVScoped, SelectInstrumentedComputePipelineRegex) {
     m_errorMonitor->VerifyFound();
 }
 
+TEST_F(NegativeGpuAVScoped, SelectInstrumentedComputeShaderObjectRegex) {
+    TEST_DESCRIPTION("Selectively instrument a compute shader object for validation, using regexes");
+    SetTargetApiVersion(VK_API_VERSION_1_2);
+    AddRequiredExtensions(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    AddRequiredExtensions(VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::shaderObject);
+    std::vector<VkLayerSettingEXT> layer_settings(2);
+    layer_settings[0] = {OBJECT_LAYER_NAME, "gpuav_select_instrumented_shaders", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &kVkTrue};
+    std::array<const char*, 1> shader_regexes = {{"shader_object_foo"}};
+    layer_settings[1] = {OBJECT_LAYER_NAME, "gpuav_shaders_to_instrument", VK_LAYER_SETTING_TYPE_STRING_EXT, size32(shader_regexes),
+                         shader_regexes.data()};
+
+    RETURN_IF_SKIP(InitGpuAvFramework(layer_settings));
+    RETURN_IF_SKIP(InitState());
+
+    vkt::Buffer write_buffer(*m_device, 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, kHostVisibleMemProps);
+    OneOffDescriptorSet descriptor_set(m_device, {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr}});
+
+    const vkt::PipelineLayout pipeline_layout(*m_device, {&descriptor_set.layout_});
+    descriptor_set.WriteDescriptorBufferInfo(0, write_buffer, 0, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+    descriptor_set.UpdateDescriptorSets();
+
+    const char cs_source[] = R"glsl(
+        #version 450
+        layout(set = 0, binding = 0) buffer StorageBuffer { uint data[]; } Data;
+        void main() {
+                Data.data[4] = 0xdeadca71;
+        }
+    )glsl";
+
+    const vkt::ShaderEXT cs(*m_device, VK_SHADER_STAGE_COMPUTE_BIT, GLSLToSPV(VK_SHADER_STAGE_COMPUTE_BIT, cs_source),
+                            &descriptor_set.layout_.handle());
+
+    VkDebugUtilsObjectNameInfoEXT name_info = vku::InitStructHelper();
+    name_info.objectType = VK_OBJECT_TYPE_SHADER_EXT;
+    name_info.pObjectName = "shader_object_foo";
+    name_info.objectHandle = uint64_t(cs.handle());
+    vk::SetDebugUtilsObjectNameEXT(device(), &name_info);
+
+    m_command_buffer.Begin();
+    vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &descriptor_set.set_, 0,
+                              nullptr);
+    m_command_buffer.BindCompShaderEXT(cs);
+    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_command_buffer.End();
+
+    m_errorMonitor->SetDesiredErrorRegex("VUID-vkCmdDispatch-None-08613", "shader_object_foo");
+    m_default_queue->SubmitAndWait(m_command_buffer);
+    m_errorMonitor->VerifyFound();
+}
+
 TEST_F(NegativeGpuAVScoped, SelectInstrumentedComputePipelineCDLDump) {
     TEST_DESCRIPTION("Selectively instrument a compute pipeline for validation, using a CDL dump file as input");
     SetTargetApiVersion(VK_API_VERSION_1_2);
@@ -647,22 +698,10 @@ TEST_F(NegativeGpuAVScoped, SelectInstrumentedPipelineLibrariesRegex) {
     frag_out_lib.InitFragmentOutputLibInfo();
     frag_out_lib.CreateGraphicsPipeline(false);
 
-    VkPipeline libraries[4] = {
-        vertex_input_lib,
-        pre_raster_lib,
-        frag_shader_lib,
-        frag_out_lib,
-    };
-    VkPipelineLibraryCreateInfoKHR link_info = vku::InitStructHelper();
-    link_info.libraryCount = size32(libraries);
-    link_info.pLibraries = libraries;
-
-    VkGraphicsPipelineCreateInfo exe_pipe_ci = vku::InitStructHelper(&link_info);
-    exe_pipe_ci.layout = pipeline_layout;
     {
-        vkt::Pipeline exe_pipe(*m_device, exe_pipe_ci);
+        vkt::Pipeline exe_pipe(*m_device, {vertex_input_lib, pre_raster_lib, frag_shader_lib, frag_out_lib}, pipeline_layout);
     }
-    vkt::Pipeline exe_pipe_2(*m_device, exe_pipe_ci);
+    vkt::Pipeline exe_pipe_2(*m_device, {vertex_input_lib, pre_raster_lib, frag_shader_lib, frag_out_lib}, pipeline_layout);
 
     VkDebugUtilsObjectNameInfoEXT name_info = vku::InitStructHelper();
     name_info.objectType = VK_OBJECT_TYPE_PIPELINE;
@@ -850,14 +889,14 @@ TEST_F(NegativeGpuAVScoped, SelectInstrumentedShadersShaderObject) {
 
     VkDescriptorSetLayout descriptor_set_layouts[] = {vert_descriptor_set.layout_};
 
-    VkShaderCreateInfoEXT vert_create_info = ShaderCreateInfo(vert_spv, VK_SHADER_STAGE_VERTEX_BIT, 1, descriptor_set_layouts);
-    VkShaderCreateInfoEXT frag_create_info = ShaderCreateInfo(frag_spv, VK_SHADER_STAGE_FRAGMENT_BIT, 1, descriptor_set_layouts);
+    VkShaderCreateInfoEXT vert_create_info = ShaderCreateInfoEXT(vert_spv, VK_SHADER_STAGE_VERTEX_BIT, 1, descriptor_set_layouts);
+    VkShaderCreateInfoEXT frag_create_info = ShaderCreateInfoEXT(frag_spv, VK_SHADER_STAGE_FRAGMENT_BIT, 1, descriptor_set_layouts);
 
     vert_create_info.pNext = &kValFeature;
     frag_create_info.pNext = &kValFeature;
 
-    const vkt::Shader vert_shader(*m_device, vert_create_info);
-    const vkt::Shader frag_shader(*m_device, frag_create_info);
+    const vkt::ShaderEXT vert_shader(*m_device, vert_create_info);
+    const vkt::ShaderEXT frag_shader(*m_device, frag_create_info);
 
     vkt::Buffer buffer(*m_device, 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vert_descriptor_set.WriteDescriptorBufferInfo(0, buffer, 0, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -865,8 +904,8 @@ TEST_F(NegativeGpuAVScoped, SelectInstrumentedShadersShaderObject) {
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
-    m_command_buffer.BindShaders(vert_shader, frag_shader);
+    SetDefaultDynamicStatesExcludeEXT();
+    m_command_buffer.BindShadersEXT(vert_shader, frag_shader);
     vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u, &vert_descriptor_set.set_,
                               0u, nullptr);
     vk::CmdDraw(m_command_buffer, 3, 1, 0, 0);
@@ -916,14 +955,14 @@ TEST_F(NegativeGpuAVScoped, SelectInstrumentedShadersShaderObjectDrawIndexedIndi
 
     VkDescriptorSetLayout descriptor_set_layouts[] = {vert_descriptor_set.layout_};
 
-    VkShaderCreateInfoEXT vert_create_info = ShaderCreateInfo(vert_spv, VK_SHADER_STAGE_VERTEX_BIT, 1, descriptor_set_layouts);
-    VkShaderCreateInfoEXT frag_create_info = ShaderCreateInfo(frag_spv, VK_SHADER_STAGE_FRAGMENT_BIT, 1, descriptor_set_layouts);
+    VkShaderCreateInfoEXT vert_create_info = ShaderCreateInfoEXT(vert_spv, VK_SHADER_STAGE_VERTEX_BIT, 1, descriptor_set_layouts);
+    VkShaderCreateInfoEXT frag_create_info = ShaderCreateInfoEXT(frag_spv, VK_SHADER_STAGE_FRAGMENT_BIT, 1, descriptor_set_layouts);
 
     vert_create_info.pNext = &kValFeature;
     frag_create_info.pNext = &kValFeature;
 
-    const vkt::Shader vert_shader(*m_device, vert_create_info);
-    const vkt::Shader frag_shader(*m_device, frag_create_info);
+    const vkt::ShaderEXT vert_shader(*m_device, vert_create_info);
+    const vkt::ShaderEXT frag_shader(*m_device, frag_create_info);
 
     vkt::Buffer buffer(*m_device, 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     vert_descriptor_set.WriteDescriptorBufferInfo(0, buffer, 0, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
@@ -945,8 +984,8 @@ TEST_F(NegativeGpuAVScoped, SelectInstrumentedShadersShaderObjectDrawIndexedIndi
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
-    m_command_buffer.BindShaders(vert_shader, frag_shader);
+    SetDefaultDynamicStatesExcludeEXT();
+    m_command_buffer.BindShadersEXT(vert_shader, frag_shader);
     vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u, &vert_descriptor_set.set_,
                               0u, nullptr);
 
@@ -1050,20 +1089,8 @@ TEST_F(NegativeGpuAVScoped, GPLWriteSelectPipeline) {
     frag_out_lib.InitFragmentOutputLibInfo();
     frag_out_lib.CreateGraphicsPipeline(false);
 
-    VkPipeline libraries[4] = {
-        vertex_input_lib,
-        pre_raster_lib,
-        frag_shader_lib,
-        frag_out_lib,
-    };
-    VkPipelineLibraryCreateInfoKHR link_info = vku::InitStructHelper();
-    link_info.libraryCount = size32(libraries);
-    link_info.pLibraries = libraries;
-
-    VkGraphicsPipelineCreateInfo exe_pipe_ci = vku::InitStructHelper(&link_info);
-    exe_pipe_ci.layout = pipeline_layout;
     m_errorMonitor->SetDesiredInfo("oh_my_pipeline");
-    vkt::Pipeline exe_pipe(*m_device, exe_pipe_ci);
+    vkt::Pipeline exe_pipe(*m_device, {vertex_input_lib, pre_raster_lib, frag_shader_lib, frag_out_lib}, pipeline_layout);
     m_errorMonitor->VerifyFound();
 
     m_command_buffer.Begin();
@@ -1164,21 +1191,9 @@ TEST_F(NegativeGpuAVScoped, GPLWriteSelectShaders) {
     frag_out_lib.InitFragmentOutputLibInfo();
     frag_out_lib.CreateGraphicsPipeline(false);
 
-    VkPipeline libraries[4] = {
-        vertex_input_lib,
-        pre_raster_lib,
-        frag_shader_lib,
-        frag_out_lib,
-    };
-    VkPipelineLibraryCreateInfoKHR link_info = vku::InitStructHelper();
-    link_info.libraryCount = size32(libraries);
-    link_info.pLibraries = libraries;
-
-    VkGraphicsPipelineCreateInfo exe_pipe_ci = vku::InitStructHelper(&link_info);
-    exe_pipe_ci.layout = pipeline_layout;
     m_errorMonitor->SetDesiredInfo("vertex_foo");
     m_errorMonitor->SetDesiredInfo("fragment_bar");
-    vkt::Pipeline exe_pipe(*m_device, exe_pipe_ci);
+    vkt::Pipeline exe_pipe(*m_device, {vertex_input_lib, pre_raster_lib, frag_shader_lib, frag_out_lib}, pipeline_layout);
     m_errorMonitor->VerifyFound();
 
     m_command_buffer.Begin();

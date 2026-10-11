@@ -29,7 +29,7 @@
 #ifdef _WIN32
 /* Windows-specific common code: */
 // WinBase.h defines CreateSemaphore and synchapi.h defines CreateEvent
-//  undefine them to avoid conflicts with VkLayerDispatchTable struct members.
+//  undefine them to avoid conflicts with the vk:: function pointers below.
 #ifdef CreateSemaphore
 #undef CreateSemaphore
 #endif
@@ -913,6 +913,7 @@ extern PFN_vkCmdEndRendering2EXT CmdEndRendering2EXT;
 extern PFN_vkCmdBeginCustomResolveEXT CmdBeginCustomResolveEXT;
 extern PFN_vkGetPhysicalDeviceQueueFamilyDataGraphOpticalFlowImageFormatsARM GetPhysicalDeviceQueueFamilyDataGraphOpticalFlowImageFormatsARM;
 extern PFN_vkCmdSetComputeOccupancyPriorityNV CmdSetComputeOccupancyPriorityNV;
+extern PFN_vkGetPhysicalDeviceCooperativeMatrixProperties2EXT GetPhysicalDeviceCooperativeMatrixProperties2EXT;
 #ifdef VK_USE_PLATFORM_UBM_SEC
 extern PFN_vkCreateUbmSurfaceSEC CreateUbmSurfaceSEC;
 extern PFN_vkGetPhysicalDeviceUbmPresentationSupportSEC GetPhysicalDeviceUbmPresentationSupportSEC;

@@ -116,7 +116,6 @@ class Validator : public GpuShaderInstrumentor {
                                                   chassis::CmdBindDescriptorBuffers& chassis_state) final;
     void PostCallRecordGetDescriptorEXT(VkDevice device, const VkDescriptorGetInfoEXT* pDescriptorInfo, size_t dataSize,
                                         void* pDescriptor, const RecordObject& record_obj) final;
-
     void PreCallActionCommand(Validator& gpuav, CommandBufferSubState& cb_state, const LastBound& last_bound, const Location& loc);
 
     void PreCallRecordCmdDraw(VkCommandBuffer commandBuffer, uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex,
@@ -149,6 +148,8 @@ class Validator : public GpuShaderInstrumentor {
                                                const RecordObject& record_obj) final;
     void PreCallRecordCmdDrawIndexedIndirectCount2KHR(VkCommandBuffer commandBuffer, const VkDrawIndirectCount2InfoKHR* pInfo,
                                                       const RecordObject& record_obj) final;
+    void PreCallRecordCmdDrawMeshTasksIndirect2EXT(VkCommandBuffer commandBuffer, const VkDrawIndirect2InfoKHR* pInfo,
+                                                   const RecordObject& record_obj) final;
     void PreCallRecordCmdDrawMeshTasksIndirectCount2EXT(VkCommandBuffer commandBuffer, const VkDrawIndirectCount2InfoKHR* pInfo,
                                                         const RecordObject& record_obj) final;
     void PreCallRecordCmdDrawIndirectByteCount(VkCommandBuffer commandBuffer, const RecordObject& record_obj);
@@ -199,13 +200,18 @@ class Validator : public GpuShaderInstrumentor {
                                                          const VkAccelerationStructureBuildGeometryInfoKHR* pInfos,
                                                          const VkAccelerationStructureBuildRangeInfoKHR* const* ppBuildRangeInfos,
                                                          const RecordObject& record_obj) final;
-    void PreCallRecordCmdTraceRaysNV(VkCommandBuffer commandBuffer, VkBuffer raygenShaderBindingTableBuffer,
-                                     VkDeviceSize raygenShaderBindingOffset, VkBuffer missShaderBindingTableBuffer,
-                                     VkDeviceSize missShaderBindingOffset, VkDeviceSize missShaderBindingStride,
-                                     VkBuffer hitShaderBindingTableBuffer, VkDeviceSize hitShaderBindingOffset,
-                                     VkDeviceSize hitShaderBindingStride, VkBuffer callableShaderBindingTableBuffer,
-                                     VkDeviceSize callableShaderBindingOffset, VkDeviceSize callableShaderBindingStride,
-                                     uint32_t width, uint32_t height, uint32_t depth, const RecordObject& record_obj) final;
+    void PostCallRecordCmdBuildAccelerationStructuresIndirectKHR(VkCommandBuffer commandBuffer, uint32_t infoCount,
+                                                                 const VkAccelerationStructureBuildGeometryInfoKHR* pInfos,
+                                                                 const VkDeviceAddress* pIndirectDeviceAddresses,
+                                                                 const uint32_t* pIndirectStrides,
+                                                                 const uint32_t* const* ppMaxPrimitiveCounts,
+                                                                 const RecordObject& record_obj) final;
+    void PostCallRecordCmdCopyAccelerationStructureKHR(VkCommandBuffer commandBuffer,
+                                                       const VkCopyAccelerationStructureInfoKHR* pInfo,
+                                                       const RecordObject& record_obj) final;
+    void PostCallRecordCmdCopyMemoryToAccelerationStructureKHR(VkCommandBuffer commandBuffer,
+                                                               const VkCopyMemoryToAccelerationStructureInfoKHR* pInfo,
+                                                               const RecordObject& record_obj) final;
     void PreCallRecordCmdTraceRaysKHR(VkCommandBuffer commandBuffer,
                                       const VkStridedDeviceAddressRegionKHR* pRaygenShaderBindingTable,
                                       const VkStridedDeviceAddressRegionKHR* pMissShaderBindingTable,
@@ -244,13 +250,13 @@ class Validator : public GpuShaderInstrumentor {
                                        const ErrorObject& error_obj) const override;
 
     bool ValidateProtectedImage(const vvl::CommandBuffer& cb_state, const vvl::Image& image_state, const Location& image_loc,
-                                const char* vuid, const char* more_message = "") const final;
+                                const char* more_message = "") const final;
     bool ValidateUnprotectedImage(const vvl::CommandBuffer& cb_state, const vvl::Image& image_state, const Location& image_loc,
-                                  const char* vuid, const char* more_message = "") const final;
+                                  const char* more_message = "") const final;
     bool ValidateProtectedBuffer(const vvl::CommandBuffer& cb_state, const vvl::Buffer& buffer_state, const Location& buffer_loc,
-                                 const char* vuid, const char* more_message = "") const final;
+                                 const char* more_message = "") const final;
     bool ValidateUnprotectedBuffer(const vvl::CommandBuffer& cb_state, const vvl::Buffer& buffer_state, const Location& buffer_loc,
-                                   const char* vuid, const char* more_message = "") const final;
+                                   const char* more_message = "") const final;
     bool ValidateProtectedTensor(const vvl::CommandBuffer& cb_state, const vvl::Tensor& tensor_state, const Location& tensor_loc,
                                  const char* more_message = "") const final;
     bool ValidateUnprotectedTensor(const vvl::CommandBuffer& cb_state, const vvl::Tensor& tensor_state, const Location& tensor_loc,
@@ -264,7 +270,6 @@ class Validator : public GpuShaderInstrumentor {
     void Created(vvl::Buffer&) final;
     void Created(vvl::BufferView&) final;
     void Created(vvl::Sampler&) final;
-    void Created(vvl::AccelerationStructureNV&) final;
     void Created(vvl::AccelerationStructureKHR&) final;
     void Created(vvl::Tensor&) final;
     void Created(vvl::TensorView&) final;

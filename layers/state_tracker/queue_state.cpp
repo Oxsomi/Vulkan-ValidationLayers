@@ -31,8 +31,8 @@ void vvl::QueueSubmission::BeginUse() {
     for (SemaphoreInfo& wait : wait_semaphores) {
         wait.semaphore->BeginUse();
     }
-    for (CommandBufferSubmission& cb_submission : cb_submissions) {
-        cb_submission.cb->BeginUse();
+    for (CommandBufferSubmitInfo& cb_info : cb_infos) {
+        cb_info.cb->BeginUse();
     }
     for (SemaphoreInfo& signal : signal_semaphores) {
         signal.semaphore->BeginUse();
@@ -49,8 +49,8 @@ void vvl::QueueSubmission::EndUse() {
     for (SemaphoreInfo& wait : wait_semaphores) {
         wait.semaphore->EndUse();
     }
-    for (CommandBufferSubmission& cb_submission : cb_submissions) {
-        cb_submission.cb->EndUse();
+    for (CommandBufferSubmitInfo& cb_info : cb_infos) {
+        cb_info.cb->EndUse();
     }
     for (SemaphoreInfo& signal : signal_semaphores) {
         signal.semaphore->EndUse();
@@ -69,14 +69,15 @@ uint64_t vvl::Queue::PreSubmit(std::vector<vvl::QueueSubmission>&& submissions) 
     }
     uint64_t last_batch_seq = 0;
     for (QueueSubmission& submission : submissions) {
-        for (CommandBufferSubmission& cb_submission : submission.cb_submissions) {
-            auto cb_guard = cb_submission.cb->WriteLock();
-            for (CommandBuffer* secondary_cmd_buffer : cb_submission.cb->linked_command_buffers) {
+        for (uint32_t cb_index = 0; cb_index < submission.cb_infos.size(); cb_index++) {
+            CommandBufferSubmitInfo& cb_info = submission.cb_infos[cb_index];
+            auto cb_guard = cb_info.cb->WriteLock();
+            for (CommandBuffer* secondary_cmd_buffer : cb_info.cb->linked_command_buffers) {
                 auto secondary_guard = secondary_cmd_buffer->WriteLock();
                 secondary_cmd_buffer->submit_count++;
             }
-            cb_submission.cb->submit_count++;
-            cb_submission.cb->SubmitTimeValidate(*this, submission.perf_submit_pass, submission.loc.Get());
+            cb_info.cb->submit_count++;
+            cb_info.cb->SubmitTimeValidate(*this, submission, cb_index);
         }
         // seq_ is atomic so we don't need a lock until updating the deque below.
         // Note that this relies on the external synchonization requirements for the
@@ -104,6 +105,20 @@ uint64_t vvl::Queue::PreSubmit(std::vector<vvl::QueueSubmission>&& submissions) 
     }
     {
         auto guard = Lock();
+
+        // Register the seq of the first QueueSubmission that PostSubmit should process.
+        // submissions_ may contain previously submitted batches that were already
+        // PostSubmit-processed but have not been Retired yet.
+        if (!submissions.empty()) {
+            if (first_seq_to_post_process_ == 0) {
+                first_seq_to_post_process_ = submissions.front().seq;
+            } else {
+                // PreSubmit can run twice without a PostSubmit in between (e.g. internally sync queues).
+                // Take the smaller seq so the earlier batch is not skipped.
+                first_seq_to_post_process_ = std::min(first_seq_to_post_process_, submissions.front().seq);
+            }
+        }
+
         submissions_.insert(submissions_.end(), std::make_move_iterator(submissions.begin()),
                             std::make_move_iterator(submissions.end()));
         if (!thread_) {
@@ -111,6 +126,30 @@ uint64_t vvl::Queue::PreSubmit(std::vector<vvl::QueueSubmission>&& submissions) 
         }
     }
     return last_batch_seq;
+}
+
+void vvl::Queue::PostSubmit() {
+    auto guard = Lock();
+    if (!submissions_.empty()) {
+        if (first_seq_to_post_process_ != 0) {
+            for (auto& item : sub_states_) {
+                for (vvl::QueueSubmission& submission : submissions_) {
+                    if (submission.seq < first_seq_to_post_process_) {
+                        continue;
+                    }
+                    if (!item.second->PostSubmit(submission)) {
+                        break;
+                    }
+                }
+            }
+        }
+        // Wait on the external fence because we may not be able to track when it's signaled
+        QueueSubmission& submission = submissions_.back();
+        if (submission.has_external_fence) {
+            submission.fence->NotifyAndWait(submission.loc.Get());
+        }
+    }
+    first_seq_to_post_process_ = 0;
 }
 
 void vvl::Queue::Notify(uint64_t until_seq) {
@@ -140,10 +179,10 @@ void vvl::Queue::Wait(const Location& loc, uint64_t until_seq) {
     }
     auto wait_status = waiter.wait_until(GetCondWaitTimeout());
     if (wait_status != std::future_status::ready) {
-        device_state_.LogError("INTERNAL-ERROR-VkQueue-state-timeout", Handle(), loc,
-                               "The Validation Layers hit a timeout waiting for queue state to update."
-                               " seq=%" PRIu64 " until=%" PRIu64,
-                               seq_.load(), until_seq);
+        device_state_.LogInternalError("INTERNAL-ERROR-VkQueue-state-timeout", Handle(), loc,
+                                       "The Validation Layers hit a timeout waiting for queue state to update."
+                                       " seq=%" PRIu64 " until=%" PRIu64,
+                                       seq_.load(), until_seq);
     }
 }
 
@@ -201,14 +240,14 @@ std::optional<vvl::SemaphoreInfo> vvl::Queue::FindTimelineWaitWithoutResolvingSi
     return {};
 }
 
-vvl::Func vvl::Queue::GetPendingEventWaitCommand(VkEvent event) const {
+std::pair<VkCommandBuffer, vvl::Func> vvl::Queue::GetPendingEventWaitCommand(VkEvent event) const {
     auto guard = Lock();
     for (const QueueSubmission& submission : submissions_) {
-        if (const vvl::Func* wait_command = vvl::Find(submission.event_wait_commands, event)) {
+        if (const auto* wait_command = vvl::Find(submission.event_wait_commands, event)) {
             return *wait_command;
         }
     }
-    return vvl::Func::Empty;
+    return {VK_NULL_HANDLE, vvl::Func::Empty};
 }
 
 // The submissions on present-only queue can be retired without explicit fence/semaphore sync.
@@ -273,20 +312,6 @@ void vvl::Queue::Destroy() {
         item.second->Destroy();
     }
     StateObject::Destroy();
-}
-
-void vvl::Queue::PostSubmit() {
-    auto guard = Lock();
-    if (!submissions_.empty()) {
-        for (auto& item : sub_states_) {
-            item.second->PostSubmit(submissions_);
-        }
-        // Wait on the external fence because we may not be able to track when it's signaled
-        QueueSubmission& submission = submissions_.back();
-        if (submission.has_external_fence) {
-            submission.fence->NotifyAndWait(submission.loc.Get());
-        }
-    }
 }
 
 vvl::QueueSubmission* vvl::Queue::NextSubmission() {

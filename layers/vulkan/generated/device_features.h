@@ -74,6 +74,8 @@ struct DeviceFeatures {
     bool borderColorSwizzle;
     // VkPhysicalDeviceBorderColorSwizzleFeaturesEXT
     bool borderColorSwizzleFromImage;
+    // VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE
+    bool bufferDeviceAddressAllocationAlignment;
     // VkPhysicalDeviceBufferDeviceAddressFeatures, VkPhysicalDeviceVulkan12Features
     bool bufferDeviceAddress;
     // VkPhysicalDeviceBufferDeviceAddressFeatures, VkPhysicalDeviceVulkan12Features
@@ -111,19 +113,19 @@ struct DeviceFeatures {
     // VkPhysicalDeviceConditionalRenderingFeaturesEXT
     bool inheritedConditionalRendering;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixBlockLoads;
+    bool cooperativeMatrixBlockLoadsNV;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixConversions;
+    bool cooperativeMatrixConversionsNV;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixFlexibleDimensions;
+    bool cooperativeMatrixFlexibleDimensionsNV;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixPerElementOperations;
+    bool cooperativeMatrixPerElementOperationsNV;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixReductions;
+    bool cooperativeMatrixReductionsNV;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixTensorAddressing;
+    bool cooperativeMatrixTensorAddressingNV;
     // VkPhysicalDeviceCooperativeMatrix2FeaturesNV
-    bool cooperativeMatrixWorkgroupScope;
+    bool cooperativeMatrixWorkgroupScopeNV;
     // VkPhysicalDeviceCooperativeMatrixConversionFeaturesQCOM
     bool cooperativeMatrixConversion;
     // VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV
@@ -132,6 +134,18 @@ struct DeviceFeatures {
     bool cooperativeMatrix;
     // VkPhysicalDeviceCooperativeMatrixFeaturesKHR, VkPhysicalDeviceCooperativeMatrixFeaturesNV
     bool cooperativeMatrixRobustBufferAccess;
+    // VkPhysicalDeviceCooperativeMatrixLayoutsFeaturesARM
+    bool cooperativeMatrixArmLayouts;
+    // VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT
+    bool cooperativeMatrixConversions;
+    // VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT
+    bool cooperativeMatrixGetCoordinate;
+    // VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT
+    bool cooperativeMatrixPerElementOperations;
+    // VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT
+    bool cooperativeMatrixProperties2;
+    // VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT
+    bool cooperativeMatrixReductions;
     // VkPhysicalDeviceCooperativeVectorFeaturesNV
     bool cooperativeVector;
     // VkPhysicalDeviceCooperativeVectorFeaturesNV
@@ -562,6 +576,8 @@ struct DeviceFeatures {
     bool robustImageAccess;
     // VkPhysicalDeviceImageSlicedViewOf3DFeaturesEXT
     bool imageSlicedViewOf3D;
+    // VkPhysicalDeviceImageTilingControlFeaturesEXT
+    bool imageTilingControl;
     // VkPhysicalDeviceImageViewMinLodFeaturesEXT
     bool minLod;
     // VkPhysicalDeviceImagelessFramebufferFeatures, VkPhysicalDeviceVulkan12Features
@@ -690,7 +706,7 @@ struct DeviceFeatures {
     bool pipelineCreationCacheControl;
     // VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR
     bool pipelineExecutableInfo;
-    // VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT
+    // VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR
     bool pipelineLibraryGroupHandles;
     // VkPhysicalDevicePipelineOpacityMicromapFeaturesARM
     bool pipelineOpacityMicromap;
@@ -762,6 +778,8 @@ struct DeviceFeatures {
     bool primitivesGeneratedQueryWithNonZeroStreams;
     // VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT
     bool primitivesGeneratedQueryWithRasterizerDiscard;
+    // VkPhysicalDevicePrivateDataBaseHandleFeaturesNV
+    bool privateDataBaseHandle;
     // VkPhysicalDevicePrivateDataFeatures, VkPhysicalDeviceVulkan13Features
     bool privateData;
     // VkPhysicalDeviceProtectedMemoryFeatures, VkPhysicalDeviceVulkan11Features

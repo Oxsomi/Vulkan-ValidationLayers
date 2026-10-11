@@ -16,6 +16,7 @@
 #include "layer_validation_tests.h"
 #include "pipeline_helper.h"
 #include "render_pass_helper.h"
+#include "test_framework.h"
 #include "thread_helper.h"
 
 class PositiveCommand : public VkLayerTest {};
@@ -859,4 +860,59 @@ TEST_F(PositiveCommand, SetPrimitiveRestartIndexLimits) {
 
     m_command_buffer.EndRenderPass();
     m_command_buffer.End();
+}
+
+TEST_F(PositiveCommand, ArmSchedulingControls) {
+    TEST_DESCRIPTION("Use shader-core and dispatch-parameter scheduling controls.");
+
+    SetTargetApiVersion(VK_API_VERSION_1_1);
+    AddRequiredExtensions(VK_ARM_SHADER_CORE_BUILTINS_EXTENSION_NAME);
+    AddRequiredExtensions(VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::schedulingControls);
+    RETURN_IF_SKIP(InitFramework());
+
+    if (!DeviceExtensionSupported(VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME, 2)) {
+        GTEST_SKIP() << VK_ARM_SCHEDULING_CONTROLS_EXTENSION_NAME << " spec version 2 not supported";
+    }
+
+    VkPhysicalDeviceSchedulingControlsDispatchParametersPropertiesARM dispatch_props = vku::InitStructHelper();
+    VkPhysicalDeviceShaderCoreBuiltinsPropertiesARM shader_core_props = vku::InitStructHelper(&dispatch_props);
+    VkPhysicalDeviceSchedulingControlsPropertiesARM scheduling_props = vku::InitStructHelper(&shader_core_props);
+    GetPhysicalDeviceProperties2(scheduling_props);
+
+    constexpr VkPhysicalDeviceSchedulingControlsFlagsARM required_controls =
+        VK_PHYSICAL_DEVICE_SCHEDULING_CONTROLS_SHADER_CORE_COUNT_ARM |
+        VK_PHYSICAL_DEVICE_SCHEDULING_CONTROLS_DISPATCH_PARAMETERS_ARM;
+    if ((scheduling_props.schedulingControlsFlags & required_controls) != required_controls) {
+        GTEST_SKIP() << "Required features not supported";
+    }
+
+    VkDeviceQueueShaderCoreControlCreateInfoARM shader_core_control = vku::InitStructHelper();
+    shader_core_control.shaderCoreCount = 1;
+    RETURN_IF_SKIP(InitState(nullptr, &shader_core_control));
+
+    if ((m_default_queue_caps & VK_QUEUE_COMPUTE_BIT) == 0) {
+        GTEST_SKIP() << "Default queue does not support compute commands";
+    }
+
+    VkDispatchParametersARM dispatch_parameters = vku::InitStructHelper();
+    dispatch_parameters.maxWarpsPerShaderCore = dispatch_props.schedulingControlsMaxWarpsCount;
+    dispatch_parameters.maxQueuedWorkGroupBatches = dispatch_props.schedulingControlsMaxQueuedBatchesCount;
+    dispatch_parameters.workGroupBatchSize = dispatch_props.schedulingControlsMaxWorkGroupBatchSize;
+
+    m_command_buffer.Begin();
+    vk::CmdSetDispatchParametersARM(m_command_buffer, &dispatch_parameters);
+    m_command_buffer.End();
+}
+
+TEST_F(PositiveCommand, CommandBufferReset) {
+    TEST_DESCRIPTION("https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8487");
+    // was created with VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+    RETURN_IF_SKIP(Init());
+    m_command_buffer.Begin();
+    m_command_buffer.Begin();
+    m_command_buffer.Begin();
+    m_command_buffer.Reset();
+    m_command_buffer.Begin();
+    m_command_buffer.Begin();
 }

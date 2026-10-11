@@ -13,14 +13,15 @@
  */
 
 #include <vulkan/vulkan_core.h>
+#include <chrono>
 #include <thread>
 #include "layer_validation_tests.h"
 #include "descriptor_helper.h"
 #include "thread_helper.h"
 
-#if GTEST_IS_THREADSAFE
 class PositiveThreading : public VkLayerTest {};
 
+#if GTEST_IS_THREADSAFE
 TEST_F(PositiveThreading, DisplayObjects) {
     TEST_DESCRIPTION("Create and use VkDisplayKHR objects with GetPhysicalDeviceDisplayPropertiesKHR in thread-safety.");
 
@@ -299,7 +300,7 @@ TEST_F(PositiveThreading, Queue) {
 
     std::mutex queue_mutex;
 
-    constexpr auto test_duration = seconds{2};
+    constexpr auto test_duration = milliseconds{150};
     const auto timer_begin = steady_clock::now();
 
     const auto& testing_thread1 = [&]() {

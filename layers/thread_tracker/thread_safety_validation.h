@@ -23,6 +23,7 @@
 #include <string>
 #include <thread>
 #include "chassis/validation_object.h"
+#include "generated/error_location_helper.h"
 
 namespace threadsafety {
 
@@ -234,6 +235,12 @@ class Counter {
             ss << "another thread";
         }
 
+        if (loc.function == vvl::Func::vkMapMemory || loc.function == vvl::Func::vkMapMemory2 ||
+            other_func == vvl::Func::vkMapMemory || other_func == vvl::Func::vkMapMemory2) {
+            ss << "\nNote: mapping memory may seem like a read-only operation, but the memory object (not the underlying memory) "
+                  "might be modified during the call.";
+        }
+
         logger->LogError(vuid, object, loc, "%s", ss.str().c_str());
     }
 
@@ -272,6 +279,10 @@ class Instance : public vvl::BaseInstance {
     void PostCallRecordGetPhysicalDeviceDisplayProperties2KHR(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
                                                               VkDisplayProperties2KHR *pProperties,
                                                               const RecordObject &record_obj) override;
+
+    void PostCallRecordGetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice, uint32_t planeIndex,
+                                                           uint32_t *pDisplayCount, VkDisplayKHR *pDisplays,
+                                                           const RecordObject &record_obj) override;
 
     void PreCallRecordGetDisplayPlaneCapabilities2KHR(VkPhysicalDevice physicalDevice,
                                                       const VkDisplayPlaneInfo2KHR *pDisplayPlaneInfo,

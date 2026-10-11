@@ -411,11 +411,9 @@ TEST_F(NegativeGeometryTessellation, BuiltinBlockSizeMismatchVsGsShaderObject) {
         }
     )glsl";
 
-    const vkt::Shader vertShader(*m_device, VK_SHADER_STAGE_VERTEX_BIT,
-                                 GLSLToSPV(VK_SHADER_STAGE_VERTEX_BIT, kVertexPointSizeGlsl));
-    const vkt::Shader geomShader(*m_device, VK_SHADER_STAGE_GEOMETRY_BIT, GLSLToSPV(VK_SHADER_STAGE_GEOMETRY_BIT, gsSource));
-    const vkt::Shader fragShader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT,
-                                 GLSLToSPV(VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentMinimalGlsl));
+    const vkt::ShaderEXT vertShader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, kVertexPointSizeGlsl);
+    const vkt::ShaderEXT geomShader(*m_device, VK_SHADER_STAGE_GEOMETRY_BIT, gsSource);
+    const vkt::ShaderEXT fragShader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentMinimalGlsl);
 
     const VkShaderStageFlagBits stages[] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
                                             VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, VK_SHADER_STAGE_GEOMETRY_BIT,
@@ -424,7 +422,7 @@ TEST_F(NegativeGeometryTessellation, BuiltinBlockSizeMismatchVsGsShaderObject) {
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
+    SetDefaultDynamicStatesExcludeEXT();
     vk::CmdBindShadersEXT(m_command_buffer, 5, stages, shaders);
     m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-OpVariable-08746");
     vk::CmdDraw(m_command_buffer, 4, 1, 0, 0);
@@ -1566,17 +1564,16 @@ TEST_F(NegativeGeometryTessellation, MismatchedTessellationExecutionModesDraw) {
                OpFunctionEnd
         )";
 
-    const vkt::Shader vert_shader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, GLSLToSPV(VK_SHADER_STAGE_VERTEX_BIT, kVertexMinimalGlsl));
-    const vkt::Shader frag_shader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT,
-                                  GLSLToSPV(VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentMinimalGlsl));
+    const vkt::ShaderEXT vert_shader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, kVertexMinimalGlsl);
+    const vkt::ShaderEXT frag_shader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentMinimalGlsl);
 
     std::vector<uint32_t> tesc_spv;
     ASMtoSPV(SPV_ENV_VULKAN_1_0, 0, tesc_src, tesc_spv);
-    const vkt::Shader tesc_shader(*m_device, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, tesc_spv);
+    const vkt::ShaderEXT tesc_shader(*m_device, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, tesc_spv);
 
     std::vector<uint32_t> tese_spv;
     ASMtoSPV(SPV_ENV_VULKAN_1_0, 0, tese_src, tese_spv);
-    const vkt::Shader tese_shader(*m_device, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, tese_spv);
+    const vkt::ShaderEXT tese_shader(*m_device, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, tese_spv);
 
     const VkShaderStageFlagBits stages[] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
                                             VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
@@ -1584,7 +1581,7 @@ TEST_F(NegativeGeometryTessellation, MismatchedTessellationExecutionModesDraw) {
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
+    SetDefaultDynamicStatesExcludeEXT();
     vk::CmdSetPrimitiveTopologyEXT(m_command_buffer, VK_PRIMITIVE_TOPOLOGY_PATCH_LIST);
     vk::CmdBindShadersEXT(m_command_buffer, 4, stages, shaders);
     m_errorMonitor->SetDesiredError("VUID-vkCmdDraw-OpExecutionMode-12239");

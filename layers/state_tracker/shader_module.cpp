@@ -745,7 +745,7 @@ StaticImageAccess::StaticImageAccess(const Module& module_state, const Instructi
     // There is only one way to write to images, everything else is considered a read access
     access_mask |= (image_opcode == spv::OpImageWrite) ? AccessBit::image_write : AccessBit::image_read;
 
-    // Do sampler searching as seperate walk to not have the "visited" loop protection be falsly triggered
+    // Do sampler searching as separate walk to not have the "visited" loop protection be falsely triggered
     std::vector<const Instruction*> sampler_insn_to_search;
 
     auto walk_to_variables = [this, &module_state, &func_parameter_map, &sampler_insn_to_search](const Instruction* find_insn,
@@ -882,6 +882,10 @@ EntryPoint::EntryPoint(const Module& module_state, const Instruction& entrypoint
     // Tried to just create this map in GetResourceInterfaceVariables() but ran into errors because the function is static
     for (const auto& variable : resource_interface_variables) {
         resource_interface_variable_map[variable.id] = &variable;
+
+        if (stage == VK_SHADER_STAGE_FRAGMENT_BIT && variable.decorations.Has(spirv::DecorationSet::input_attachment_bit)) {
+            has_input_attachment = true;
+        }
     }
 
     // After all variables are made, can get references from them
@@ -960,9 +964,13 @@ Module::StaticData::StaticData(const Module& module_state, bool parse, Stateless
     {
         std::vector<uint32_t>::const_iterator it = module_state.words_.cbegin();
         it += 5;  // skip first 5 word of header
-        instructions.reserve(module_state.words_.size() * 4);
+        // We can never have more instructions than word, so this should be less... but how much less?
+        // Using a _LARGE_ shader database, found the average dwords-per-instruction
+        // is around 4.5 where 95% of shaders had over 4.0
+        // The absolute the lowest of any of the shaders the average was 3 (dwords-per-instruction)
+        instructions.reserve(module_state.words_.size() / 3);
         while (it != module_state.words_.cend()) {
-            auto new_insn = instructions.emplace_back(it);
+            const Instruction& new_insn = instructions.emplace_back(it);
             const uint32_t opcode = new_insn.Opcode();
 
             // Check for opcodes that would require reparsing of the words
@@ -1064,6 +1072,12 @@ Module::StaticData::StaticData(const Module& module_state, bool parse, Stateless
             case spv::OpEndStreamPrimitive:
                 if (stateless_data) {
                     stateless_data->transform_feedback_stream_inst.push_back(&insn);
+                }
+                break;
+
+            case spv::OpLoopMerge:
+                if (stateless_data) {
+                    stateless_data->loop_merge_inst.push_back(&insn);
                 }
                 break;
 
@@ -1589,7 +1603,7 @@ void Module::DescribeTypeInner(std::ostringstream& ss, uint32_t type, uint32_t i
         case spv::OpTypeImage:
             ss << "image(dim=" << insn->Word(3) << ", sampled=" << insn->Word(7) << ")";
             break;
-        case spv::OpTypeAccelerationStructureNV:
+        case spv::OpTypeAccelerationStructureKHR:
             ss << "accelerationStruture";
             break;
         default:
@@ -1775,7 +1789,8 @@ uint32_t Module::ResolveConstantFoldHeaps(const VkPhysicalDeviceDescriptorHeapPr
                                           const spirv::Instruction& spec_constant_op) const {
     assert(spec_constant_op.Opcode() == spv::OpSpecConstantOp);
     const uint32_t spec_op = spec_constant_op.Word(3);
-    if (!IsValueIn((spv::Op)spec_op, {spv::OpIMul, spv::OpIAdd, spv::OpISub, spv::OpUGreaterThan, spv::OpUGreaterThanEqual, spv::OpULessThan, spv::OpULessThanEqual, spv::OpSelect})) {
+    if (!IsValueIn((spv::Op)spec_op, {spv::OpIMul, spv::OpIAdd, spv::OpISub, spv::OpUMod, spv::OpUGreaterThan,
+                                      spv::OpUGreaterThanEqual, spv::OpULessThan, spv::OpULessThanEqual, spv::OpSelect})) {
         assert(false);  // hit another case
         return 0;
     }
@@ -1794,6 +1809,8 @@ uint32_t Module::ResolveConstantFoldHeaps(const VkPhysicalDeviceDescriptorHeapPr
         return operand_0 + operand_1;
     } else if (spec_op == spv::OpISub) {
         return operand_0 - operand_1;
+    } else if (spec_op == spv::OpUMod) {
+        return operand_0 % operand_1;
     } else if (spec_op == spv::OpUGreaterThan) {
         return operand_0 > operand_1;
     } else if (spec_op == spv::OpUGreaterThanEqual) {
@@ -2539,7 +2556,7 @@ bool ResourceInterfaceVariable::IsHeap() const {
 }
 
 const Instruction& ResourceInterfaceVariable::FindBaseType(ResourceInterfaceVariable& variable, const Module& module_state) {
-    // Takes a OpVariable and looks at the the descriptor type it uses. This will find things such as if the variable is writable,
+    // Takes a OpVariable and looks at the descriptor type it uses. This will find things such as if the variable is writable,
     // image atomic operation, matching images to samplers, etc
     const Instruction* type = module_state.FindDef(variable.type_id);
     assert(type->Opcode() == spv::OpTypePointer || type->Opcode() == spv::OpTypeUntypedPointerKHR);
@@ -2593,7 +2610,7 @@ VkDescriptorType ResourceInterfaceVariable::GetPotentialDescriptorType() const {
         return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     } else if (is_combined_image_sampler) {
         return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    } else if (is_acceleration_structure || is_acceleration_structure_nv) {
+    } else if (is_acceleration_structure) {
         return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     }
     return VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -2638,14 +2655,7 @@ vvl::unordered_set<VkDescriptorType> ResourceInterfaceVariable::GetAllDescriptor
         types.insert(VK_DESCRIPTOR_TYPE_TENSOR_ARM);
     } else if (is_acceleration_structure) {
         types.insert(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
-        if (is_partitioned_acceleration_structure) {
-            types.insert(VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV);
-        }
-    } else if (is_acceleration_structure_nv) {
-        types.insert(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_NV);
-        if (is_partitioned_acceleration_structure) {
-            types.insert(VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV);
-        }
+        types.insert(VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV);
     }
 
     assert(!types.empty() || IsHeap());
@@ -2751,10 +2761,8 @@ ResourceInterfaceVariable::ResourceInterfaceVariable(const Module& module_state,
                     if (is_input_attachment) {
                         if (!IsArray()) {
                             input_attachment_index_read.emplace(0);
-                        } else if (image_access.image_access_chain_index != kInvalidValue &&
-                                   image_access.image_access_chain_index != kSpecConstant) {
-                            // Non-constant index requires GPU-AV
-                            // Spec Constants are handled after constant folding
+                        } else {
+                            // Might be kInvalidValue, but handled from the code accessing it
                             input_attachment_index_read.emplace(image_access.image_access_chain_index);
                         }
                     }
@@ -2808,19 +2816,7 @@ ResourceInterfaceVariable::ResourceInterfaceVariable(const Module& module_state,
     } else if (base_type_opcode == spv::OpTypeSampler) {
         is_sampler = true;
     } else if (base_type_opcode == spv::OpTypeAccelerationStructureKHR) {
-        // The SPIR-V OpType* are alias, but the Descriptor Types are different
-
-        // Only KHR or NV base acceleration structure is selected
-        if (module_state.HasCapability(spv::CapabilityRayTracingNV)) {
-            is_acceleration_structure_nv = true;
-        } else {
-            is_acceleration_structure = true;
-        }
-
-        // Additionally allow PTLAS if shader uses cluster acceleration structure features
-        if (module_state.HasCapability(spv::CapabilityRayTracingClusterAccelerationStructureNV)) {
-            is_partitioned_acceleration_structure = true;
-        }
+        is_acceleration_structure = true;
     }
 
     for (const Instruction* pointer : entrypoint.accessible.access_chains) {

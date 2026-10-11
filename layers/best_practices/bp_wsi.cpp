@@ -18,9 +18,6 @@
  */
 
 #include "best_practices/best_practices_validation.h"
-#include "best_practices/bp_state.h"
-#include "generated/error_location_helper.h"
-#include "state_tracker/device_state.h"
 #include "state_tracker/wsi_state.h"
 
 bool bp_state::Instance::ValidateGetPhysicalDeviceDisplayPlaneProperties(VkPhysicalDevice physicalDevice,
@@ -183,7 +180,6 @@ void BestPractices::ManualPostCallRecordQueuePresentKHR(VkQueue queue, const VkP
     // end-of-frame cleanup
     num_queue_submissions_ = 0;
     num_barriers_objects_ = 0;
-    ClearPipelinesUsedInFrame();
 }
 
 bool bp_state::Instance::PreCallValidateGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface,
@@ -212,10 +208,10 @@ bool BestPractices::PreCallValidateQueuePresentKHR(VkQueue queue, const VkPresen
         auto num = num_queue_submissions_.load();
         if (num > kNumberOfSubmissionWarningLimitAMD) {
             skip |= LogPerformanceWarning("BestPractices-Submission-ReduceNumberOfSubmissions", device, error_obj.location,
-                                          "%s %s command buffers submitted %" PRId32
+                                          "%s command buffers submitted %" PRId32
                                           " times this frame. Submitting command buffers has a CPU "
                                           "and GPU overhead. Submit fewer times to incur less overhead.",
-                                          VendorSpecificTag(kBPVendorAMD), VendorSpecificTag(kBPVendorNVIDIA), num);
+                                          VendorSpecificTag(kBPVendorAMD | kBPVendorNVIDIA).c_str(), num);
         }
     }
 

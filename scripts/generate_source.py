@@ -245,6 +245,10 @@ def RunGenerators(api: str, registry: str, grammar: str, directory: str, styleFi
             'generator' : DispatchObjectGenerator,
             'genCombined': True,
         },
+        'dispatch_object_init.cpp' : {
+            'generator' : DispatchObjectGenerator,
+            'genCombined': True,
+        },
         'dispatch_vector.h' : {
             'generator' : DispatchVectorGenerator,
             'genCombined': True,
@@ -442,10 +446,9 @@ def main(argv):
     verify_exclude = [
         '.clang-format',
         'gpuav_offline_spirv.h',
-        'gpuav_offline_spirv.cpp',
-        'feature_requirements_helper.h', # https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/8969
-        'feature_requirements_helper.cpp',
-        'feature_not_present.cpp', # this single funciton really fails with various clang-format versions
+        'gpuav_offline_spirv_glsl.cpp',
+        'gpuav_offline_spirv_slang.cpp',
+        'feature_not_present.cpp', # this single function really fails with various clang-format versions
     ]
 
     parser = argparse.ArgumentParser(description='Generate source code for this repository')
@@ -481,7 +484,6 @@ def main(argv):
     if args.generated_version:
         json_files = []
         json_files.append(repo_relative('layers/VkLayer_khronos_validation.json.in'))
-        json_files.append(repo_relative('tests/layers/VkLayer_device_profile_api.json.in'))
         for json_file in json_files:
             with open(json_file, 'r') as file:
                 json_str = file.read()

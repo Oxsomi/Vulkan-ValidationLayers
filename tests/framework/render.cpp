@@ -19,16 +19,18 @@
 
 #include "render.h"
 
-#include <cassert>
-#include <cstring>
-
-#include <vulkan/utility/vk_format_utils.h>
+#include <unordered_set>
 
 #include "generated/vk_extension_helper.h"
 #include "layer_validation_tests.h"
 #include "vk_layer_config.h"
 #include "shader_helper.h"
 #include "containers/container_utils.h"
+
+// Cache to quickly skip tests.
+// If an extension is known to be unsupported we detect it on the first test and quickly skip the following tests.
+// Since most non core 1.0 features need an extension to enable, we just check the extension instead of the feature bit.
+static std::unordered_set<std::string> g_unsupported_extensions;
 
 #if defined(VK_USE_PLATFORM_METAL_EXT)
 #include "apple_wsi.h"
@@ -169,6 +171,13 @@ VkInstanceCreateInfo VkRenderFramework::GetInstanceCreateInfo() const {
 }
 
 void VkRenderFramework::InitFramework(void* instance_pnext) {
+    // If we already know this device doesn't support a requested extension, skip instantly.
+    for (const char* ext : m_required_extensions) {
+        if (g_unsupported_extensions.count(ext)) {
+            GTEST_SKIP() << "Early Skip: " << ext << " is unsupported.";
+        }
+    }
+
     ASSERT_EQ((VkInstance)0, instance_);
 
     const auto ExtensionIncludedInTargetVersion = [this](const char* extension) {
@@ -237,8 +246,9 @@ void VkRenderFramework::InitFramework(void* instance_pnext) {
         ici.pNext = instance_pnext;
     }
 
-    ASSERT_EQ(VK_SUCCESS, vk::CreateInstance(&ici, nullptr, &instance_));
+    const VkResult create_instance_result = vk::CreateInstance(&ici, nullptr, &instance_);
     if (instance_pnext) reinterpret_cast<VkBaseOutStructure*>(last_pnext)->pNext = nullptr;  // reset back borrowed pNext chain
+    ASSERT_EQ(VK_SUCCESS, create_instance_result) << string_VkResult(create_instance_result);
 
     for (const char* instance_ext_name : m_instance_extension_names) {
         vk::InitInstanceExtension(instance_, instance_ext_name);
@@ -330,6 +340,12 @@ void VkRenderFramework::InitFramework(void* instance_pnext) {
 
     if (!std::all_of(m_required_extensions.begin(), m_required_extensions.end(),
                      [&](const char* ext) -> bool { return IsExtensionsEnabled(ext); })) {
+        for (const char* ext : m_required_extensions) {
+            if (!IsExtensionsEnabled(ext)) {
+                g_unsupported_extensions.insert(ext);
+            }
+        }
+
         GTEST_SKIP() << RequiredExtensionsNotSupported() << " not supported";
     }
 
@@ -1014,6 +1030,14 @@ void VkRenderFramework::SupportMultiSwapchain() {
 #endif  // VK_USE_PLATFORM_ANDROID_KHR
 }
 
+void VkRenderFramework::SupportDeferredSwapchainAllocation() {
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
+    // The Android loader accepts VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR and returns a valid swapchain,
+    // but vkAcquireNextImageKHR then calls a null driver entry point and crashes inside libvulkan.so
+    GTEST_SKIP() << "Android currently doesn't support deferred swapchain memory allocation";
+#endif  // VK_USE_PLATFORM_ANDROID_KHR
+}
+
 void VkRenderFramework::SupportSurfaceResize() {
     if (!SurfaceContext::CanResize()) {
         GTEST_SKIP() << "VVL test framework does not support surface resizing on the current platform";
@@ -1193,8 +1217,8 @@ void VkRenderFramework::DestroyRenderTarget() {
     m_framebuffer = nullptr;
 }
 
-void VkRenderFramework::SetDefaultDynamicStatesExclude(const std::vector<VkDynamicState>& exclude, bool tessellation,
-                                                       VkCommandBuffer commandBuffer) {
+void VkRenderFramework::SetDefaultDynamicStatesExcludeEXT(const std::vector<VkDynamicState>& exclude, bool tessellation,
+                                                          VkCommandBuffer commandBuffer) {
     const auto excluded = [&exclude](VkDynamicState state) {
         for (const auto& check_state : exclude) {
             if (check_state == state) {
@@ -1268,7 +1292,7 @@ void VkRenderFramework::SetDefaultDynamicStatesExclude(const std::vector<VkDynam
     if (!excluded(VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT)) vk::CmdSetColorWriteMaskEXT(cmdBuffer, 0u, 1u, &colorWriteMask);
 }
 
-void VkRenderFramework::SetDefaultDynamicStatesAll(VkCommandBuffer cmdBuffer) {
+void VkRenderFramework::SetDefaultDynamicStatesAllEXT(VkCommandBuffer cmdBuffer) {
     uint32_t width = 32;
     uint32_t height = 32;
     VkViewport viewport = {0, 0, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};

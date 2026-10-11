@@ -64,8 +64,7 @@ std::optional<VkExternalMemoryHandleTypeFlagBits> GetImportHandleType(const VkMe
     return std::nullopt;
 }
 
-static bool IsMultiInstance(const VkMemoryAllocateInfo& alloc_info, const VkMemoryHeap& memory_heap,
-                            uint32_t physical_device_count) {
+bool IsMultiInstance(const VkMemoryAllocateInfo& alloc_info, const VkMemoryHeap& memory_heap, uint32_t physical_device_count) {
     auto alloc_flags = vku::FindStructInPNextChain<VkMemoryAllocateFlagsInfo>(alloc_info.pNext);
     if (alloc_flags && (alloc_flags->flags & VK_MEMORY_ALLOCATE_DEVICE_MASK_BIT)) {
         auto dev_mask = alloc_flags->deviceMask;
@@ -180,6 +179,33 @@ bool vvl::BindableSparseMemoryTracker::HasFullRangeBound() const {
     }
 
     return true;
+}
+
+bool vvl::BindableSparseMemoryTracker::IsRangeFullyBound(const BufferRange& range) const {
+    if (!range.valid() || range.empty()) {
+        return true;
+    }
+
+    // binding_map_ is keyed on resource-space ranges and iterates in ascending order, so we can walk the bindings that
+    // intersect |range| and make sure they cover it without leaving a gap.
+    VkDeviceSize covered_to = range.begin;
+    auto guard = ReadLockGuard{binding_lock_};
+    const auto end = binding_map_.upper_bound(range);
+    for (auto it = binding_map_.lower_bound(range); it != end; ++it) {
+        const auto& [resource_range, memory_data] = *it;
+        if (resource_range.begin > covered_to) {
+            return false;  // gap before this binding
+        }
+        if (!memory_data.memory_state || memory_data.memory_state->Invalid()) {
+            return false;
+        }
+        covered_to = std::max(covered_to, resource_range.end);
+        if (covered_to >= range.end) {
+            return true;
+        }
+    }
+
+    return covered_to >= range.end;
 }
 
 void vvl::BindableSparseMemoryTracker::BindMemory(StateObject* parent, std::shared_ptr<vvl::DeviceMemory>& memory_state,

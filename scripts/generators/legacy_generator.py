@@ -24,9 +24,6 @@ class LegacyGenerator(BaseGenerator):
     def __init__(self):
         BaseGenerator.__init__(self)
 
-        self.all_device_extensions = set()
-        self.all_instance_extensions = set()
-
     def generate(self):
         self.write(f'''// *** THIS FILE IS GENERATED - DO NOT EDIT ***
             // See {os.path.basename(__file__)} for modifications
@@ -50,11 +47,6 @@ class LegacyGenerator(BaseGenerator):
             * limitations under the License.
             ****************************************************************************/\n''')
         self.write('// NOLINTBEGIN') # Wrap for clang-tidy to ignore
-
-        for extensions in [x.legacy.extensions for x in self.vk.commands.values() if x.legacy and x.legacy.extensions and x.instance]:
-            self.all_instance_extensions.update(extensions)
-        for extensions in [x.legacy.extensions for x in self.vk.commands.values() if x.legacy and x.legacy.extensions and x.device]:
-            self.all_device_extensions.update(extensions)
 
         if self.filename == 'legacy.h':
             self.generateHeader()
@@ -233,7 +225,7 @@ class LegacyGenerator(BaseGenerator):
                         print(f'WARNING - need to fix supersededBy logic for {command.name} with {command.legacy.supersededBy}')
                     replacement = f'which contains {new_command} that can be used instead'
 
-                # seperate message depending on legacy_detection_settings
+                # separate message depending on legacy_detection_settings
                 out.append(f'''
                     {logic} (legacy_detection_settings.only_enabled && IsExtEnabled(extensions.{extension.lower()})) {{
                         {reportedMember} = true;
@@ -259,8 +251,9 @@ class LegacyGenerator(BaseGenerator):
             # For things mark as legacy in Vulkan 1.0
             if command.legacy.version is None and len(command.legacy.extensions) == 0:
                 out.append(f'''
+                           {reportedMember} = true;
                            LogWarning("WARNING-{command.legacy.link}", {objName}, error_obj.location,
-                            "{command.name} is a legacy command.\\nSee more information about this superseding in the specification: https://docs.vulkan.org/spec/latest/appendices/legacy.html#{command.legacy.link}");
+                            "{command.name} is a legacy command.\\nSee more information about this legacy in the specification: https://docs.vulkan.org/spec/latest/appendices/legacy.html#{command.legacy.link}");
                     ''')
 
             out.append('''

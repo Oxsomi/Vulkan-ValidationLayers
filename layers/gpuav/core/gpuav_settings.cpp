@@ -53,7 +53,8 @@ void GpuAVSettings::DisableShaderInstrumentationAndOptions() {
 }
 bool GpuAVSettings::IsBufferValidationEnabled() const {
     return validate_indirect_draws_buffers || validate_indirect_dispatches_buffers || validate_indirect_trace_rays_buffers ||
-           validate_buffer_copies || validate_copy_memory_indirect || validate_index_buffers;
+           validate_buffer_copies || validate_copy_memory_indirect || validate_index_buffers ||
+           validate_acceleration_structures_builds;
 }
 void GpuAVSettings::SetBufferValidationEnabled(bool enabled) {
     validate_indirect_draws_buffers = enabled;
@@ -67,11 +68,16 @@ void GpuAVSettings::SetBufferValidationEnabled(bool enabled) {
 
 void GpuAVSettings::SetShaderSelectionRegexes(std::vector<std::string>&& shader_selection_regexes) {
     for (std::string& r : shader_selection_regexes) {
-        this->shader_selection_regexes.emplace_back(std::move(r));
+        if (!r.empty()) {
+            this->shader_selection_regexes.emplace_back(std::move(r));
+        }
     }
 }
 
 void GpuAVSettings::LoadCDLDump(std::string&& path, std::vector<std::string>& setting_warnings) {
+    if (path.empty()) {
+        return;  // vkconfig will pass this as an empty string sometimes
+    }
     std::ifstream cdl_dump_file(path, std::ios::ate | std::ios::in);
     if (!cdl_dump_file.is_open()) {
         setting_warnings.emplace_back(std::string("Could not load CDL dump file ") + path);
@@ -85,7 +91,7 @@ void GpuAVSettings::LoadCDLDump(std::string&& path, std::vector<std::string>& se
 
     bool found_pipeline = false;
     std::regex look_for_pipeline(R"(pipeline:\s*handle:[\s\S]*?\[([^\]]*)\])", std::regex_constants::ECMAScript);
-    for (std::smatch matches; (found_pipeline = std::regex_search(cdl_dump_txt, matches, look_for_pipeline));
+    for (std::smatch matches; (found_pipeline = std::regex_search(cdl_dump_txt, matches, look_for_pipeline)) == true;
          cdl_dump_txt = matches.suffix()) {
         const std::string pipe_name = matches[1];
         if (!pipe_name.empty()) {

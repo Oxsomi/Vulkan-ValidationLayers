@@ -28,6 +28,7 @@
 #include "generated/vk_validation_error_messages.h"
 #include "utils/hash_util.h"
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <vulkan/layer/vk_layer_settings.hpp>
@@ -198,12 +199,20 @@ const char* VK_LAYER_GPUAV_DEBUG_MAX_INSTRUMENTATIONS_COUNT = "gpuav_debug_max_i
 const char* VK_LAYER_GPUAV_DEBUG_PRINT_INSTRUMENTATION_INFO = "gpuav_debug_print_instrumentation_info";
 const char* VK_LAYER_GPUAV_DEBUG_DISABLE_DONTINLINE = "gpuav_debug_disable_dontinline";
 
+// Only for the Validation Layer test suite
+const char* VK_LAYER_GPUAV_DEBUG_TEST_LOWER_LIMITS = "gpuav_debug_test_lower_limits";
+
 // SyncVal
 // ---
-const char* VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION = "syncval_submit_time_validation";
+const char* VK_LAYER_SYNCVAL_FULL_VALIDATION = "syncval_full_validation";
+const char* VK_LAYER_SYNCVAL_RECORD_TIME_VALIDATION = "syncval_record_time_validation";
 const char* VK_LAYER_SYNCVAL_SHADER_ACCESSES_HEURISTIC = "syncval_shader_accesses_heuristic";
 const char* VK_LAYER_SYNCVAL_LOAD_OP_AFTER_STORE_OP_VALIDATION = "syncval_load_op_after_store_op_validation";
 const char* VK_LAYER_SYNCVAL_MESSAGE_EXTRA_PROPERTIES = "syncval_message_extra_properties";
+// [DEPRECATED]
+// Deprecated right before the 1.4.363 SDK release, alias of VK_LAYER_SYNCVAL_FULL_VALIDATION.
+// TODO: mark as REMOVED in a later release
+const char* VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION = "syncval_submit_time_validation";
 
 // Message Formatting
 // ---
@@ -657,12 +666,12 @@ static void ProcessDebugReportSettings(ConfigAndEnvSettings* settings_data, VkuL
         } else {
             if (element.find(',') != std::string::npos) {
                 setting_warnings.emplace_back("\"" + element +
-                                              "\" was not a valid option for VK_LAYER_DEBUG_ACTION (ignoring).\nIf using "
+                                              "\" was not a valid option for VK_LAYER_DEBUG_ACTION (ignoring).\n  If using "
                                               "VkLayerSettings, each string needs to be its own VkLayerSettingEXT::pValues.");
             } else {
                 setting_warnings.emplace_back(
                     "\"" + element +
-                    "\" was not a valid option for VK_LAYER_DEBUG_ACTION (ignoring).\nValid options are "
+                    "\" was not a valid option for VK_LAYER_DEBUG_ACTION (ignoring).\n  Valid options are "
                     "[VK_DBG_LAYER_ACTION_IGNORE, VK_DBG_LAYER_ACTION_CALLBACK, VK_DBG_LAYER_ACTION_LOG_MSG, "
                     "VK_DBG_LAYER_ACTION_BREAK, VK_DBG_LAYER_ACTION_DEBUG_OUTPUT, VK_DBG_LAYER_ACTION_FAIL, "
                     "VK_DBG_LAYER_ACTION_DEFAULT]");
@@ -688,11 +697,11 @@ static void ProcessDebugReportSettings(ConfigAndEnvSettings* settings_data, VkuL
         } else {
             if (element.find(',') != std::string::npos) {
                 setting_warnings.emplace_back("\"" + element +
-                                              "\" was not a valid option for VK_LAYER_REPORT_FLAGS (ignoring)\nIf using "
+                                              "\" was not a valid option for VK_LAYER_REPORT_FLAGS (ignoring)\n  If using "
                                               "VkLayerSettings, each string needs to be its own VkLayerSettingEXT::pValues.");
             } else {
                 setting_warnings.emplace_back("\"" + element +
-                                              "\" was not a valid option for VK_LAYER_REPORT_FLAGS (ignoring)\nValid options are "
+                                              "\" was not a valid option for VK_LAYER_REPORT_FLAGS (ignoring)\n  Valid options are "
                                               "[error, warn, info, perf, verbose].");
             }
         }
@@ -807,8 +816,9 @@ static void ProcessDebugReportSettings(ConfigAndEnvSettings* settings_data, VkuL
         dbg_create_info.pUserData = (void*)log_output;
         LayerCreateMessengerCallback(debug_report, default_layer_callback, &dbg_create_info, &messenger);
     } else if (!is_stdout) {
-        setting_warnings.emplace_back("The log_filename was set to " + log_filename +
-                                      " but VK_DBG_LAYER_ACTION_LOG_MSG was not set, so it won't be sent to the file.");
+        setting_warnings.emplace_back("log_filename was set to " + log_filename +
+                                      " but debug_action (VK_LAYER_DEBUG_ACTION) does not include VK_DBG_LAYER_ACTION_LOG_MSG, so "
+                                      "nothing will be written to the file.");
     }
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -849,7 +859,7 @@ static std::string GetDeprecatedEnabledDisabledWarning(const std::vector<std::st
     if (!disabled.empty()) {
         ss << " \"disables\" (VK_LAYER_DISABLES)";
     }
-    ss << " layer settings.\nDeprecated settings and new settings cannot be mixed, and deprecated ones take precedence. Consider "
+    ss << " layer settings.\n  Deprecated settings and new settings cannot be mixed, and deprecated ones take precedence. Consider "
           "only using the new settings:\n";
 
     // We tried to have a more clever way to do this, but was hitting strange compiler issues...
@@ -1088,9 +1098,9 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
             // ... we don't need 64k slots for the kErrorLoggerId_Mask, so could increase 64k if really wanted
             // (If we update, please update the SetMaxIndicesCountAtTheLimit test)
             if (gpuav_settings.invalid_index_command >= 65535) {
-                setting_warnings.emplace_back(
-                    "VK_LAYER_GPUAV_MAX_INDICES_COUNT (gpuav_max_indices_count) is being set to 65534, the max value supported "
-                    "currently.");
+                setting_warnings.emplace_back("VK_LAYER_GPUAV_MAX_INDICES_COUNT (gpuav_max_indices_count) was set to " +
+                                              std::to_string(gpuav_settings.invalid_index_command) +
+                                              " but is being set to 65534, the max value supported currently.");
                 gpuav_settings.invalid_index_command = 65534;
             }
             gpuav_settings.indices_buffer_count = gpuav_settings.invalid_index_command + 1;
@@ -1149,16 +1159,16 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
         if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_INDEX_BUFFERS)) {
             vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_INDEX_BUFFERS, gpuav_settings.validate_index_buffers);
         }
-    }
-
-    if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_ACCELERATION_STRUCTURES_BUILDS)) {
-        vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_ACCELERATION_STRUCTURES_BUILDS,
-                                gpuav_settings.validate_acceleration_structures_builds);
-    }
-
-    if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_RAY_TRACING_BUFFERS_CONSISTENCY)) {
-        vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_RAY_TRACING_BUFFERS_CONSISTENCY,
-                                gpuav_settings.ray_tracing_buffers_consistency);
+        if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_ACCELERATION_STRUCTURES_BUILDS)) {
+            vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_ACCELERATION_STRUCTURES_BUILDS,
+                                    gpuav_settings.validate_acceleration_structures_builds);
+        }
+        if (gpuav_settings.validate_acceleration_structures_builds) {
+            if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_RAY_TRACING_BUFFERS_CONSISTENCY)) {
+                vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_RAY_TRACING_BUFFERS_CONSISTENCY,
+                                        gpuav_settings.ray_tracing_buffers_consistency);
+            }
+        }
     }
 
     if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_FORCE_ON_ROBUSTNESS)) {
@@ -1222,9 +1232,18 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
     }
 
     SyncValSettings& syncval_settings = *settings_data->syncval_settings;
+    // Deprecated right after the 1.4.363 SDK release: alias of syncval_full_validation.
     if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION)) {
-        vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION,
-                                syncval_settings.submit_time_validation);
+        vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION, syncval_settings.full_validation);
+        setting_warnings.emplace_back(std::string(VK_LAYER_SYNCVAL_SUBMIT_TIME_VALIDATION) + " is deprecated, please use " +
+                                      std::string(VK_LAYER_SYNCVAL_FULL_VALIDATION));
+    } else if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_SYNCVAL_FULL_VALIDATION)) {
+        vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_SYNCVAL_FULL_VALIDATION, syncval_settings.full_validation);
+    }
+
+    if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_SYNCVAL_RECORD_TIME_VALIDATION)) {
+        vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_SYNCVAL_RECORD_TIME_VALIDATION,
+                                syncval_settings.record_time_validation);
     }
 
     if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_SYNCVAL_SHADER_ACCESSES_HEURISTIC)) {
@@ -1352,8 +1371,9 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
             SetValidationFeatureDisable(settings_data->disabled, VK_VALIDATION_FEATURE_DISABLE_OBJECT_LIFETIMES_EXT);
             SetValidationFeatureDisable(settings_data->disabled, VK_VALIDATION_FEATURE_DISABLE_CORE_CHECKS_EXT);
             SetValidationFeatureDisable(settings_data->disabled, VK_VALIDATION_FEATURE_DISABLE_SHADER_VALIDATION_CACHE_EXT);
-            setting_warnings.emplace_back(
-                "Disabling as much of normal validation as possible so that only DebugPrintf will be running.");
+            setting_warnings.emplace_back(std::string(VK_LAYER_PRINTF_ONLY_PRESET) +
+                                          " was set, disabling as much of normal validation as possible so that only DebugPrintf "
+                                          "will be running.");
         }
     }
 
@@ -1361,12 +1381,14 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
     if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_ENABLE)) {
         bool gpuav_enable = false;
         vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_ENABLE, gpuav_enable);
-        if (printf_only_preset) {
-            setting_warnings.emplace_back(std::string(VK_LAYER_PRINTF_ONLY_PRESET) + " was set, so ignoring " +
-                                          std::string(VK_LAYER_GPUAV_ENABLE) + ".");
-        } else if (gpuav_enable) {
-            // enabled the new way, but chassis uses this to create Validation Object
-            settings_data->enabled[gpu_validation] = true;
+        if (gpuav_enable) {
+            if (printf_only_preset) {
+                setting_warnings.emplace_back(std::string(VK_LAYER_PRINTF_ONLY_PRESET) + " was set, so ignoring " +
+                                              std::string(VK_LAYER_GPUAV_ENABLE) + ".");
+            } else {
+                // enabled the new way, but chassis uses this to create Validation Object
+                settings_data->enabled[gpu_validation] = true;
+            }
         }
     }
 
@@ -1374,9 +1396,9 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
     // In the future, could be removed in favor of debug names supplied at pipeline creation time.
     if (gpuav_settings.select_instrumented_shaders) {
         if (settings_data->disabled[handle_wrapping]) {
-            setting_warnings.emplace_back(
-                "Handle wrapping has been disabled, but GPU-AV selective shader instrumentation is enabled. Forcing activation of "
-                "handle wrapping.");
+            setting_warnings.emplace_back(std::string(VK_LAYER_UNIQUE_HANDLES) + " (handle wrapping) was disabled, but " +
+                                          std::string(VK_LAYER_GPUAV_SELECT_INSTRUMENTED_SHADERS) +
+                                          " requires it, so it is being re-enabled.");
             settings_data->disabled[handle_wrapping] = false;
         }
     }
@@ -1395,13 +1417,6 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
         }
     }
 
-    if (settings_data->enabled[gpu_validation] && !settings_data->disabled[core_checks]) {
-        setting_warnings.emplace_back(
-            "Both GPU Assisted Validation and Normal Core Check Validation are enabled, this is not recommend as it  will be very "
-            "slow. Once all "
-            "errors in Core Check are solved, please disable, then only use GPU-AV for best performance.");
-    }
-
     // Set at the end once we decide what settings are actually on
     if (settings_data->disabled[shader_validation] || settings_data->disabled[core_checks]) {
         // only is used for core validation checks
@@ -1415,21 +1430,20 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
                 global_settings.spirv_store = false;
             } else if (settings_data->disabled[shader_validation]) {
                 setting_warnings.emplace_back(
-                    "Shader Validation was explicitly turned off, but the SPIR-V still needs to be stored, but not validated, in "
-                    "order for GPU-AV/DebugPrintf to get information from the original SPIR-V.");
+                    "Shader validation (check_shaders) is disabled, but the SPIR-V is still parsed and stored (not validated) "
+                    "because GPU-AV/DebugPrintf/GPU Dump need information from the original SPIR-V.");
             }
         } else if (settings_data->disabled[shader_validation]) {
             setting_warnings.emplace_back(
-                "Shader Validation was explicitly turned off, but the SPIR-V still needs to be parsed/stored, but not validated, "
-                "in order for Sync Validation to get read/write information out the SPIR-V.");
+                "Shader validation (check_shaders) is disabled, but the SPIR-V is still parsed and stored (not validated) "
+                "because Sync Validation needs the read/write information from the SPIR-V.");
         }
     }
 
     if (global_settings.descriptor_hashing && !settings_data->enabled[gpu_validation] && !gpu_dump_settings.descriptors) {
         setting_warnings.emplace_back(
-            "Descriptor Hashing was turned on, but neither GPU-AV nor GPU Dump (for descriptors) is enabled. Turning off as this "
-            "setting has no "
-            "effect.");
+            "Descriptor hashing (descriptor_hashing) was turned on, but neither GPU-AV nor GPU Dump (for descriptors) is enabled. "
+            "Turning off as this setting has no effect.");
         global_settings.descriptor_hashing = false;
     }
 
@@ -1468,15 +1482,32 @@ void ProcessConfigAndEnvSettings(ConfigAndEnvSettings* settings_data) {
     ProcessDebugReportSettings(settings_data, layer_setting_set, setting_warnings);
 
     // Grab application name here while we have access to it and know if to save it or not
+    const VkApplicationInfo* app_info = settings_data->create_info->pApplicationInfo;
+    const char* application_name = (app_info && app_info->pApplicationName) ? app_info->pApplicationName : "";
     if (settings_data->debug_report->message_format_settings.display_application_name) {
-        const VkApplicationInfo* app_info = settings_data->create_info->pApplicationInfo;
-        settings_data->debug_report->message_format_settings.application_name =
-            (app_info && app_info->pApplicationName) ? app_info->pApplicationName : "";
+        settings_data->debug_report->message_format_settings.application_name = application_name;
     }
 
-    for (const auto& warning : setting_warnings) {
+    // Lowering the device limits is only ever valid for the Validation Layer test suite, ignore it for anyone else
+    if (vkuHasLayerSetting(layer_setting_set, VK_LAYER_GPUAV_DEBUG_TEST_LOWER_LIMITS)) {
+        if (strcmp(application_name, "layer_tests") == 0) {
+            vkuGetLayerSettingValue(layer_setting_set, VK_LAYER_GPUAV_DEBUG_TEST_LOWER_LIMITS,
+                                    settings_data->global_settings->debug_test_lower_limits);
+        }
+    }
+
+    if (!setting_warnings.empty()) {
+        std::ostringstream ss;
+        ss << "Information with the layer settings provided:";
+        for (const auto& warning : setting_warnings) {
+            ss << "\n- " + warning;
+            // Some warnings already end in a newline, don't double up the blank line between items
+            if (warning.back() != '\n') {
+                ss << '\n';
+            }
+        }
         Location loc(vvl::Func::vkCreateInstance);
-        settings_data->debug_report->LogMessage(kWarningBit, "VALIDATION-SETTINGS", {}, loc, warning);
+        settings_data->debug_report->LogMessage(kWarningBit, "VALIDATION-SETTINGS", {}, loc, ss.str());
     }
 
     vkuDestroyLayerSettingSet(layer_setting_set, nullptr);

@@ -18,9 +18,7 @@
 
 #include "shader_helper.h"
 
-#include "test_common.h"
 #include "glslang/SPIRV/GlslangToSpv.h"
-#include <glslang/Public/ShaderLang.h>
 
 #ifdef VVL_USE_SLANG
 #pragma push_macro("None")
@@ -138,6 +136,7 @@ static void ProcessConfigFile(const VkPhysicalDeviceLimits& device_limits, TBuil
     out_resources.maxTaskWorkGroupSizeY_EXT = 1;
     out_resources.maxTaskWorkGroupSizeZ_EXT = 1;
     out_resources.maxMeshViewCountEXT = 4;
+    out_resources.maxDualSourceDrawBuffersEXT = device_limits.maxFragmentDualSrcAttachments;
 
     out_resources.limits.nonInductiveForLoops = 1;
     out_resources.limits.whileLoops = 1;
@@ -263,7 +262,7 @@ struct GlslangTargetEnv {
 //
 bool GLSLtoSPV(const VkPhysicalDeviceLimits& device_limits, const VkShaderStageFlagBits shader_type, const char* p_shader,
                std::vector<uint32_t>& spirv, const spv_target_env spv_env) {
-    TBuiltInResource resources;
+    TBuiltInResource resources = {};
     ProcessConfigFile(device_limits, resources);
 
     EShMessages messages = static_cast<EShMessages>(EShMsgDefault | EShMsgSpvRules | EShMsgVulkanRules);
@@ -593,8 +592,8 @@ VkShaderObj VkShaderObj::CreateFromASM(VkRenderFramework* framework, const char*
     return {};
 }
 
-VkDescriptorSetAndBindingMappingEXT MakeSetAndBindingMapping(uint32_t set, uint32_t binding, uint32_t count,
-                                                             VkSpirvResourceTypeFlagsEXT mask) {
+VkDescriptorSetAndBindingMappingEXT MakeSetAndBindingMappingEXT(uint32_t set, uint32_t binding, uint32_t count,
+                                                                VkSpirvResourceTypeFlagsEXT mask) {
     VkDescriptorSetAndBindingMappingEXT mapping = vku::InitStructHelper();
     mapping.descriptorSet = set;
     mapping.firstBinding = binding;
@@ -603,8 +602,8 @@ VkDescriptorSetAndBindingMappingEXT MakeSetAndBindingMapping(uint32_t set, uint3
     return mapping;
 }
 
-VkDescriptorSetAndBindingMappingEXT MakeZeroSetAndBindingMapping(uint32_t set, uint32_t binding,
-                                                                 VkDescriptorMappingSourceEXT source) {
+VkDescriptorSetAndBindingMappingEXT MakeZeroSetAndBindingMappingEXT(uint32_t set, uint32_t binding,
+                                                                    VkDescriptorMappingSourceEXT source) {
     VkDescriptorSetAndBindingMappingEXT mapping = vku::InitStructHelper();
     mapping.descriptorSet = set;
     mapping.firstBinding = binding;

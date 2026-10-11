@@ -70,6 +70,18 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
     instance->GetPhysicalDeviceMemoryProperties(physical_device, &phys_dev_mem_props);
     instance->GetPhysicalDeviceProperties(physical_device, &phys_dev_props);
 
+    // We use to have this VK_LUNARG_device_profile_api internal layer that was created before profiles to spoof device limits.
+    // We replaced it, but GPU-AV has a few tests where its hard to test as the "real" limits are normally around UINT_MAX
+    // The "workaround" is this secret setting that will set limits to a really low level purely for testing a few GPU-AV tests
+    //
+    // See https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/11869
+    if (instance->settings.global_settings.debug_test_lower_limits) {
+        phys_dev_props.limits.maxDrawIndirectCount = 1;
+        phys_dev_props.limits.maxComputeWorkGroupCount[0] = 2;
+        phys_dev_props.limits.maxComputeWorkGroupCount[1] = 2;
+        phys_dev_props.limits.maxComputeWorkGroupCount[2] = 2;
+    }
+
     // Vulkan 1.1 and later can get properties from single struct.
     // The goal is to only use the phys_dev_props_core field and funnel the properties from promoted extensions
     if (IsExtEnabled(extensions.vk_feature_version_1_2)) {
@@ -117,7 +129,7 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
             instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_khr_driver_properties, &driver_properties);
             phys_dev_props_core12.driverID = driver_properties.driverID;
             memcpy(phys_dev_props_core12.driverName, driver_properties.driverName, VK_MAX_DRIVER_NAME_SIZE);
-            memcpy(phys_dev_props_core12.driverInfo, driver_properties.driverName, VK_MAX_DRIVER_INFO_SIZE);
+            memcpy(phys_dev_props_core12.driverInfo, driver_properties.driverInfo, VK_MAX_DRIVER_INFO_SIZE);
             phys_dev_props_core12.conformanceVersion = driver_properties.conformanceVersion;
         }
 
@@ -398,8 +410,6 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
                                              &phys_dev_ext_props.cooperative_matrix_props2_nv);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_ext_transform_feedback,
                                              &phys_dev_ext_props.transform_feedback_props);
-    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_nv_ray_tracing,
-                                             &phys_dev_ext_props.ray_tracing_props_nv);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_khr_ray_tracing_pipeline,
                                              &phys_dev_ext_props.ray_tracing_props_khr);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_ext_ray_tracing_invocation_reorder,
@@ -472,6 +482,12 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
                                              &phys_dev_ext_props.cooperative_vector_props_nv);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_arm_render_pass_striped,
                                              &phys_dev_ext_props.renderpass_striped_props);
+    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_arm_scheduling_controls,
+                                             &phys_dev_ext_props.scheduling_controls_props);
+    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_arm_scheduling_controls,
+                                             &phys_dev_ext_props.scheduling_controls_dispatch_props);
+    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_arm_shader_core_builtins,
+                                             &phys_dev_ext_props.shader_core_builtins_props);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_ext_external_memory_host,
                                              &phys_dev_ext_props.external_memory_host_props);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_khr_maintenance9,
@@ -503,6 +519,10 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
                                              &phys_dev_ext_props.tile_shading_props);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_qcom_image_processing2,
                                              &phys_dev_ext_props.image_processing2_props);
+    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_qcom_shader_multiple_wait_queues,
+                                             &phys_dev_ext_props.shader_multiple_wait_queues_props);
+    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_valve_buffer_device_address_allocation_alignment,
+                                             &phys_dev_ext_props.buffer_device_address_allocation_alignment_props);
 
     // None of these "check if supported" features are possible without first having gpdp2 first
     if (IsExtEnabled(extensions.vk_khr_get_physical_device_properties2)) {
@@ -516,16 +536,6 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
         for (const auto& ext_prop : props) {
             phys_dev_extensions.insert(GetExtension(ext_prop.extensionName));
         }
-
-        // promoted to 1.3
-        special_supported.vk_khr_format_feature_flags2 =
-            api_version >= VK_API_VERSION_1_3 ||
-            phys_dev_extensions.find(Extension::_VK_KHR_format_feature_flags2) != phys_dev_extensions.end();
-
-        // robustImageAccess is required if 1.3 or VK_EXT_image_robustness supported
-        special_supported.robust_image_access =
-            api_version >= VK_API_VERSION_1_3 ||
-            phys_dev_extensions.find(Extension::_VK_EXT_image_robustness) != phys_dev_extensions.end();
 
         if (phys_dev_extensions.find(Extension::_VK_KHR_robustness2) != phys_dev_extensions.end() ||
             phys_dev_extensions.find(Extension::_VK_EXT_robustness2) != phys_dev_extensions.end()) {
@@ -885,6 +895,30 @@ BaseInstance* DispatchInstance::GetValidationObject(LayerObjectTypeId object_typ
     return nullptr;
 }
 
+VkFormatProperties3 DispatchDevice::GetFormatProperties(VkFormat format) {
+    if (auto found = format_properties_cache.find(format); found != format_properties_cache.end()) {
+        return found->second;
+    }
+
+    VkFormatProperties3 fmt_props_3 = vku::InitStructHelper();
+    if (QueryFormatFeatureFlags2(extensions)) {
+        VkFormatProperties2 fmt_props_2 = vku::InitStructHelper(&fmt_props_3);
+        DispatchGetPhysicalDeviceFormatProperties2Helper(api_version, physical_device, format, &fmt_props_2);
+        fmt_props_3.linearTilingFeatures |= fmt_props_2.formatProperties.linearTilingFeatures;
+        fmt_props_3.optimalTilingFeatures |= fmt_props_2.formatProperties.optimalTilingFeatures;
+        fmt_props_3.bufferFeatures |= fmt_props_2.formatProperties.bufferFeatures;
+    } else {
+        VkFormatProperties format_properties;
+        DispatchGetPhysicalDeviceFormatProperties(physical_device, format, &format_properties);
+        fmt_props_3.linearTilingFeatures = format_properties.linearTilingFeatures;
+        fmt_props_3.optimalTilingFeatures = format_properties.optimalTilingFeatures;
+        fmt_props_3.bufferFeatures = format_properties.bufferFeatures;
+    }
+
+    format_properties_cache.insert_or_assign(format, fmt_props_3);
+    return fmt_props_3;
+}
+
 DispatchDevice::DispatchDevice(DispatchInstance* instance, VkPhysicalDevice gpu, const VkDeviceCreateInfo* pCreateInfo)
     : HandleWrapper(instance->debug_report),
       settings(instance->settings),
@@ -900,9 +934,10 @@ DispatchDevice::DispatchDevice(DispatchInstance* instance, VkPhysicalDevice gpu,
       phys_dev_props_core13(stateless_device_data.phys_dev_props_core13),
       phys_dev_props_core14(stateless_device_data.phys_dev_props_core14),
       host_image_copy_props_copy_src_layouts(stateless_device_data.host_image_copy_props_copy_src_layouts),
-      host_imape_copy_props_copy_dst_layouts(stateless_device_data.host_image_copy_props_copy_dst_layouts),
+      host_image_copy_props_copy_dst_layouts(stateless_device_data.host_image_copy_props_copy_dst_layouts),
       phys_dev_ext_props(stateless_device_data.phys_dev_ext_props),
       physical_device(gpu) {
+    passthrough_handles = vku::FindStructInPNextChain<VkDeviceDeviceMemoryReportCreateInfoEXT>(pCreateInfo->pNext) != nullptr;
     InitValidationObjects();
     InitObjectDispatchVectors();
     for (auto& vo : object_dispatch) {
@@ -1122,38 +1157,7 @@ void HandleWrapper::UnwrapGraphicsPipelineCreateInfoHandles(vku::safe_VkGraphics
         safe_ci.renderPass = Unwrap(safe_ci.renderPass);
     }
 
-    auto* link_info = vku::FindStructInPNextChain<VkPipelineLibraryCreateInfoKHR>(safe_ci.pNext);
-    if (link_info) {
-        auto* unwrapped_libs = const_cast<VkPipeline*>(link_info->pLibraries);
-        for (uint32_t idx1 = 0; idx1 < link_info->libraryCount; ++idx1) {
-            unwrapped_libs[idx1] = Unwrap(link_info->pLibraries[idx1]);
-        }
-    }
-
-    auto device_generated_commands = vku::FindStructInPNextChain<VkGraphicsPipelineShaderGroupsCreateInfoNV>(safe_ci.pNext);
-    if (device_generated_commands) {
-        for (uint32_t idx1 = 0; idx1 < device_generated_commands->groupCount; ++idx1) {
-            for (uint32_t idx2 = 0; idx2 < device_generated_commands->pGroups[idx1].stageCount; ++idx2) {
-                auto unwrapped_stage =
-                    const_cast<VkPipelineShaderStageCreateInfo*>(&device_generated_commands->pGroups[idx1].pStages[idx2]);
-                if (device_generated_commands->pGroups[idx1].pStages[idx2].module) {
-                    unwrapped_stage->module = Unwrap(device_generated_commands->pGroups[idx1].pStages[idx2].module);
-                }
-            }
-        }
-        auto unwrapped_pipelines = const_cast<VkPipeline*>(device_generated_commands->pPipelines);
-        for (uint32_t idx1 = 0; idx1 < device_generated_commands->pipelineCount; ++idx1) {
-            unwrapped_pipelines[idx1] = Unwrap(device_generated_commands->pPipelines[idx1]);
-        }
-    }
-
-    auto* binary_info = vku::FindStructInPNextChain<VkPipelineBinaryInfoKHR>(safe_ci.pNext);
-    if (binary_info) {
-        auto* unwrapped_binaries = const_cast<VkPipelineBinaryKHR*>(binary_info->pPipelineBinaries);
-        for (uint32_t idx1 = 0; idx1 < binary_info->binaryCount; ++idx1) {
-            unwrapped_binaries[idx1] = Unwrap(binary_info->pPipelineBinaries[idx1]);
-        }
-    }
+    UnwrapPnextChainHandles(safe_ci.pNext);
 }
 
 VkResult DispatchDevice::CreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
@@ -1987,13 +1991,7 @@ VkResult DispatchDevice::CreateRayTracingPipelinesKHR(VkDevice device, VkDeferre
                     local_pCreateInfos[index0].basePipelineHandle = Unwrap(pCreateInfos[index0].basePipelineHandle);
                 }
 
-                auto* binary_info = vku::FindStructInPNextChain<VkPipelineBinaryInfoKHR>(local_pCreateInfos[index0].pNext);
-                if (binary_info) {
-                    auto* unwrapped_binaries = const_cast<VkPipelineBinaryKHR*>(binary_info->pPipelineBinaries);
-                    for (uint32_t idx1 = 0; idx1 < binary_info->binaryCount; ++idx1) {
-                        unwrapped_binaries[idx1] = Unwrap(binary_info->pPipelineBinaries[idx1]);
-                    }
-                }
+                UnwrapPnextChainHandles(local_pCreateInfos[index0].pNext);
             }
         }
     }
@@ -2002,7 +2000,15 @@ VkResult DispatchDevice::CreateRayTracingPipelinesKHR(VkDevice device, VkDeferre
         device, deferredOperation, pipelineCache, createInfoCount, (const VkRayTracingPipelineCreateInfoKHR*)local_pCreateInfos,
         pAllocator, pPipelines);
 
-    if (wrap_handles && deferredOperation == VK_NULL_HANDLE) {
+    // Fix check for deferred ray tracing pipeline creation
+    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/5817
+    //
+    // Passing a VkDeferredOperationKHR only means the implementation may defer the work, it is free to build the
+    // pipelines right away and return VK_OPERATION_NOT_DEFERRED_KHR (or VK_SUCCESS).
+    // Only VK_OPERATION_DEFERRED_KHR tells us the handles are not ready yet, anything else we have to wrap them now
+    const bool is_operation_deferred = (deferredOperation != VK_NULL_HANDLE) && (result == VK_OPERATION_DEFERRED_KHR);
+
+    if (wrap_handles && !is_operation_deferred) {
         for (uint32_t i = 0; i < createInfoCount; i++) {
             if (pPipelines[i] != VK_NULL_HANDLE) {
                 pPipelines[i] = WrapNew(pPipelines[i]);
@@ -2016,9 +2022,6 @@ VkResult DispatchDevice::CreateRayTracingPipelinesKHR(VkDevice device, VkDeferre
         }
     }
 
-    // Fix check for deferred ray tracing pipeline creation
-    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/5817
-    const bool is_operation_deferred = (deferredOperation != VK_NULL_HANDLE) && (result == VK_OPERATION_DEFERRED_KHR);
     if (is_operation_deferred) {
         std::vector<std::function<void()>> post_completion_fns;
         auto completion_find = deferred_operation_post_completion.pop(deferredOperation);
@@ -2498,13 +2501,7 @@ VkResult DispatchDevice::CreateRayTracingPipelinesNV(VkDevice device, VkPipeline
                     local_pCreateInfos[index0].basePipelineHandle = Unwrap(pCreateInfos[index0].basePipelineHandle);
                 }
 
-                auto* binary_info = vku::FindStructInPNextChain<VkPipelineBinaryInfoKHR>(local_pCreateInfos[index0].pNext);
-                if (binary_info) {
-                    auto* unwrapped_binaries = const_cast<VkPipelineBinaryKHR*>(binary_info->pPipelineBinaries);
-                    for (uint32_t idx1 = 0; idx1 < binary_info->binaryCount; ++idx1) {
-                        unwrapped_binaries[idx1] = Unwrap(binary_info->pPipelineBinaries[idx1]);
-                    }
-                }
+                UnwrapPnextChainHandles(local_pCreateInfos[index0].pNext);
             }
         }
     }
@@ -2793,9 +2790,20 @@ VkResult DispatchDevice::BindImageMemory2KHR(VkDevice device, uint32_t bindInfoC
     return result;
 }
 
+void HandleWrapper::UnwrapShaderObjectCreateInfoHandles(vku::safe_VkShaderCreateInfoEXT& safe_ci) {
+    UnwrapMappingInfo(this, safe_ci.pNext);
+
+    if (safe_ci.pSetLayouts) {
+        for (uint32_t index1 = 0; index1 < safe_ci.setLayoutCount; ++index1) {
+            safe_ci.pSetLayouts[index1] = Unwrap(safe_ci.pSetLayouts[index1]);
+        }
+    }
+}
+
 VkResult DispatchDevice::CreateShadersEXT(VkDevice device, uint32_t createInfoCount, const VkShaderCreateInfoEXT* pCreateInfos,
                                   const VkAllocationCallbacks* pAllocator, VkShaderEXT* pShaders) {
     if (!wrap_handles) return device_dispatch_table.CreateShadersEXT(device, createInfoCount, pCreateInfos, pAllocator, pShaders);
+
     small_vector<vku::safe_VkShaderCreateInfoEXT, DISPATCH_MAX_STACK_ALLOCATIONS> var_local_pCreateInfos;
     vku::safe_VkShaderCreateInfoEXT* local_pCreateInfos = nullptr;
     if (pCreateInfos) {
@@ -2804,14 +2812,7 @@ VkResult DispatchDevice::CreateShadersEXT(VkDevice device, uint32_t createInfoCo
 
         for (uint32_t index0 = 0; index0 < createInfoCount; ++index0) {
             local_pCreateInfos[index0].initialize(&pCreateInfos[index0]);
-
-            UnwrapMappingInfo(this, local_pCreateInfos[index0].pNext);
-
-            if (local_pCreateInfos[index0].pSetLayouts) {
-                for (uint32_t index1 = 0; index1 < local_pCreateInfos[index0].setLayoutCount; ++index1) {
-                    local_pCreateInfos[index0].pSetLayouts[index1] = Unwrap(local_pCreateInfos[index0].pSetLayouts[index1]);
-                }
-            }
+            UnwrapShaderObjectCreateInfoHandles(local_pCreateInfos[index0]);
         }
     }
 

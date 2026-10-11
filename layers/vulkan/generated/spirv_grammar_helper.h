@@ -311,6 +311,7 @@ static constexpr bool OpcodeHasType(uint32_t opcode) {
         case spv::OpImageBlockMatchWindowSADQCOM:
         case spv::OpImageBlockMatchGatherSSDQCOM:
         case spv::OpImageBlockMatchGatherSADQCOM:
+        case spv::OpBFloat16MulAddQCOM:
         case spv::OpCompositeConstructCoopMatQCOM:
         case spv::OpCompositeExtractCoopMatQCOM:
         case spv::OpExtractSubArrayQCOM:
@@ -355,7 +356,7 @@ static constexpr bool OpcodeHasType(uint32_t opcode) {
         case spv::OpImageSampleFootprintNV:
         case spv::OpCooperativeVectorMatrixMulNV:
         case spv::OpCooperativeVectorMatrixMulAddNV:
-        case spv::OpCooperativeMatrixConvertNV:
+        case spv::OpCooperativeMatrixConvertUseEXT:
         case spv::OpGroupNonUniformPartitionEXT:
         case spv::OpFetchMicroTriangleVertexPositionNV:
         case spv::OpFetchMicroTriangleVertexBarycentricNV:
@@ -388,9 +389,10 @@ static constexpr bool OpcodeHasType(uint32_t opcode) {
         case spv::OpCooperativeMatrixLoadNV:
         case spv::OpCooperativeMatrixMulAddNV:
         case spv::OpCooperativeMatrixLengthNV:
-        case spv::OpCooperativeMatrixReduceNV:
+        case spv::OpCooperativeMatrixGetCoordinateEXT:
+        case spv::OpCooperativeMatrixReduceEXT:
         case spv::OpCooperativeMatrixLoadTensorNV:
-        case spv::OpCooperativeMatrixPerElementOpNV:
+        case spv::OpCooperativeMatrixPerElementOpEXT:
         case spv::OpCreateTensorLayoutNV:
         case spv::OpTensorLayoutSetDimensionNV:
         case spv::OpTensorLayoutSetStrideNV:
@@ -791,6 +793,7 @@ static constexpr bool OpcodeHasResult(uint32_t opcode) {
         case spv::OpImageBlockMatchWindowSADQCOM:
         case spv::OpImageBlockMatchGatherSSDQCOM:
         case spv::OpImageBlockMatchGatherSADQCOM:
+        case spv::OpBFloat16MulAddQCOM:
         case spv::OpCompositeConstructCoopMatQCOM:
         case spv::OpCompositeExtractCoopMatQCOM:
         case spv::OpExtractSubArrayQCOM:
@@ -838,7 +841,7 @@ static constexpr bool OpcodeHasResult(uint32_t opcode) {
         case spv::OpTypeVectorIdEXT:
         case spv::OpCooperativeVectorMatrixMulNV:
         case spv::OpCooperativeVectorMatrixMulAddNV:
-        case spv::OpCooperativeMatrixConvertNV:
+        case spv::OpCooperativeMatrixConvertUseEXT:
         case spv::OpGroupNonUniformPartitionEXT:
         case spv::OpFetchMicroTriangleVertexPositionNV:
         case spv::OpFetchMicroTriangleVertexBarycentricNV:
@@ -874,9 +877,10 @@ static constexpr bool OpcodeHasResult(uint32_t opcode) {
         case spv::OpCooperativeMatrixLoadNV:
         case spv::OpCooperativeMatrixMulAddNV:
         case spv::OpCooperativeMatrixLengthNV:
-        case spv::OpCooperativeMatrixReduceNV:
+        case spv::OpCooperativeMatrixGetCoordinateEXT:
+        case spv::OpCooperativeMatrixReduceEXT:
         case spv::OpCooperativeMatrixLoadTensorNV:
-        case spv::OpCooperativeMatrixPerElementOpNV:
+        case spv::OpCooperativeMatrixPerElementOpEXT:
         case spv::OpTypeTensorLayoutNV:
         case spv::OpTypeTensorViewNV:
         case spv::OpCreateTensorLayoutNV:

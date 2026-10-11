@@ -650,6 +650,15 @@ TEST_F(PositiveDescriptorBuffer, BindingInfoUsage2) {
     m_command_buffer.Begin();
     vk::CmdBindDescriptorBuffersEXT(m_command_buffer, 1, &dbbi);
     m_command_buffer.End();
+
+    vkt::Buffer buffer2(*m_device, 4096,
+                        VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT | VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT,
+                        vkt::device_address);
+    dbbi.address = buffer2.Address();
+    dbbi.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+    m_command_buffer.Begin();
+    vk::CmdBindDescriptorBuffersEXT(m_command_buffer, 1, &dbbi);
+    m_command_buffer.End();
 }
 
 TEST_F(PositiveDescriptorBuffer, DescriptorBufferBindingInfoUsage2) {
@@ -863,12 +872,11 @@ TEST_F(PositiveDescriptorBuffer, ShaderObject) {
         }
     )glsl";
 
-    const vkt::Shader cs(*m_device, VK_SHADER_STAGE_COMPUTE_BIT, GLSLToSPV(VK_SHADER_STAGE_COMPUTE_BIT, cs_source),
-                         &ds_layout.handle());
+    const vkt::ShaderEXT cs(*m_device, VK_SHADER_STAGE_COMPUTE_BIT, GLSLToSPV(VK_SHADER_STAGE_COMPUTE_BIT, cs_source),
+                            &ds_layout.handle());
 
     m_command_buffer.Begin();
-    const VkShaderStageFlagBits stages[] = {VK_SHADER_STAGE_COMPUTE_BIT};
-    vk::CmdBindShadersEXT(m_command_buffer, 1, stages, &cs.handle());
+    m_command_buffer.BindCompShaderEXT(cs);
 
     VkDescriptorBufferBindingInfoEXT descriptor_buffer_binding_info = vku::InitStructHelper();
     descriptor_buffer_binding_info.address = descriptor_buffer.Address();
@@ -1100,21 +1108,8 @@ TEST_F(PositiveDescriptorBuffer, GraphicsPipelineLibrary) {
     frag_out_lib.InitFragmentOutputLibInfo(&create_flags);
     frag_out_lib.CreateGraphicsPipeline(false);
 
-    VkPipeline libraries[4] = {
-        vertex_input_lib,
-        pre_raster_lib,
-        frag_shader_lib,
-        frag_out_lib,
-    };
-    VkPipelineLibraryCreateInfoKHR link_info = vku::InitStructHelper();
-    link_info.libraryCount = size32(libraries);
-    link_info.pLibraries = libraries;
-
-    VkGraphicsPipelineCreateInfo exe_pipe_ci = vku::InitStructHelper(&link_info);
-    exe_pipe_ci.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    exe_pipe_ci.layout = pipeline_layout_null;
-    vkt::Pipeline exe_pipe(*m_device, exe_pipe_ci);
-    ASSERT_TRUE(exe_pipe.initialized());
+    vkt::Pipeline exe_pipe(*m_device, {vertex_input_lib, pre_raster_lib, frag_shader_lib, frag_out_lib}, pipeline_layout_null,
+                           VK_NULL_HANDLE, VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT);
 
     VkDescriptorBufferBindingInfoEXT buffer_binding_info = vku::InitStructHelper();
     buffer_binding_info.address = descriptor_buffer.Address();
@@ -1214,20 +1209,8 @@ TEST_F(PositiveDescriptorBuffer, GraphicsPipelineLibraryIndependent) {
     frag_out_lib.InitFragmentOutputLibInfo(&create_flags);
     frag_out_lib.CreateGraphicsPipeline(false);
 
-    VkPipeline libraries[4] = {
-        vertex_input_lib,
-        pre_raster_lib,
-        frag_shader_lib,
-        frag_out_lib,
-    };
-    VkPipelineLibraryCreateInfoKHR link_info = vku::InitStructHelper();
-    link_info.libraryCount = size32(libraries);
-    link_info.pLibraries = libraries;
-
-    VkGraphicsPipelineCreateInfo exe_pipe_ci = vku::InitStructHelper(&link_info);
-    exe_pipe_ci.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-    exe_pipe_ci.layout = pipeline_layout_link;
-    vkt::Pipeline exe_pipe(*m_device, exe_pipe_ci);
+    vkt::Pipeline exe_pipe(*m_device, {vertex_input_lib, pre_raster_lib, frag_shader_lib, frag_out_lib}, pipeline_layout_link,
+                           VK_NULL_HANDLE, VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT);
 
     VkDescriptorBufferBindingInfoEXT buffer_binding_info = vku::InitStructHelper();
     buffer_binding_info.address = descriptor_buffer.Address();
@@ -1320,8 +1303,7 @@ TEST_F(PositiveDescriptorBuffer, EmbeddedSamplers) {
     VkMemoryBarrier memory_barrier_1 = vku::InitStructHelper();
     memory_barrier_1.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     memory_barrier_1.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0u, 1u,
-                           &memory_barrier_1, 0u, nullptr, 0u, nullptr);
+    m_command_buffer.Barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, memory_barrier_1);
 
     m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -1338,8 +1320,7 @@ TEST_F(PositiveDescriptorBuffer, EmbeddedSamplers) {
     VkMemoryBarrier memory_barrier_2 = vku::InitStructHelper();
     memory_barrier_2.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     memory_barrier_2.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 1u,
-                           &memory_barrier_2, 0u, nullptr, 0u, nullptr);
+    m_command_buffer.Barrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, memory_barrier_2);
 
     VkBufferImageCopy region = {};
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
@@ -1845,10 +1826,6 @@ TEST_F(PositiveDescriptorBuffer, DeviceLocal) {
     buffer_memory_barrier.offset = 0u;
     buffer_memory_barrier.size = descriptor_buffer_size;
 
-    VkDependencyInfo dependency_info = vku::InitStructHelper();
-    dependency_info.bufferMemoryBarrierCount = 1u;
-    dependency_info.pBufferMemoryBarriers = &buffer_memory_barrier;
-
     VkDescriptorBufferBindingInfoEXT buffer_binding_info = vku::InitStructHelper();
     buffer_binding_info.address = device_local_descriptor_buffer.Address();
     buffer_binding_info.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
@@ -1856,7 +1833,7 @@ TEST_F(PositiveDescriptorBuffer, DeviceLocal) {
     m_command_buffer.Begin();
     VkBufferCopy buffer_copy = {0, 0, descriptor_buffer_size};
     vk::CmdCopyBuffer(m_command_buffer, src_descriptor_buffer, device_local_descriptor_buffer, 1u, &buffer_copy);
-    vk::CmdPipelineBarrier2(m_command_buffer, &dependency_info);
+    m_command_buffer.Barrier(buffer_memory_barrier);
     m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vk::CmdBindDescriptorBuffersEXT(m_command_buffer, 1, &buffer_binding_info);
@@ -2020,17 +1997,13 @@ TEST_F(PositiveDescriptorBuffer, SharedSet) {
     buffer_memory_barrier.offset = ds_layout_size;
     buffer_memory_barrier.size = ds_layout_size;
 
-    VkDependencyInfo dependency_info = vku::InitStructHelper();
-    dependency_info.bufferMemoryBarrierCount = 1u;
-    dependency_info.pBufferMemoryBarriers = &buffer_memory_barrier;
-
     VkDescriptorBufferBindingInfoEXT buffer_binding_info = vku::InitStructHelper();
     buffer_binding_info.address = descriptor_buffer.Address();
     buffer_binding_info.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
 
     m_command_buffer.Begin();
     vk::CmdCopyBuffer(m_command_buffer, copy_buffer, descriptor_buffer, 1u, &buffer_copy);
-    vk::CmdPipelineBarrier2(m_command_buffer, &dependency_info);
+    m_command_buffer.Barrier(buffer_memory_barrier);
     m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vk::CmdBindDescriptorBuffersEXT(m_command_buffer, 1, &buffer_binding_info);
@@ -2198,21 +2171,17 @@ TEST_F(PositiveDescriptorBuffer, IndependentSetMixShaderObject) {
 
     // Shader object have INDEPENDENT_SETS but have no descriptors actually
     const auto vert_spv = GLSLToSPV(VK_SHADER_STAGE_VERTEX_BIT, kVertexMinimalGlsl);
-    VkShaderCreateInfoEXT create_info = ShaderCreateInfo(vert_spv, VK_SHADER_STAGE_VERTEX_BIT);
+    VkShaderCreateInfoEXT create_info = ShaderCreateInfoEXT(vert_spv, VK_SHADER_STAGE_VERTEX_BIT);
     create_info.flags = VK_SHADER_CREATE_INDEPENDENT_SETS_BIT_KHR;
-    const vkt::Shader vert_shader(*m_device, create_info);
+    const vkt::ShaderEXT vert_shader(*m_device, create_info);
 
     const auto frag_spv = GLSLToSPV(VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentMinimalGlsl);
-    create_info = ShaderCreateInfo(frag_spv, VK_SHADER_STAGE_FRAGMENT_BIT);
+    create_info = ShaderCreateInfoEXT(frag_spv, VK_SHADER_STAGE_FRAGMENT_BIT);
     create_info.flags = VK_SHADER_CREATE_INDEPENDENT_SETS_BIT_KHR;
-    const vkt::Shader frag_shader(*m_device, create_info);
+    const vkt::ShaderEXT frag_shader(*m_device, create_info);
 
-    VkFormat color_format = VK_FORMAT_B8G8R8A8_UNORM;
-    VkPipelineRenderingCreateInfo pipeline_rendering_info = vku::InitStructHelper();
-    pipeline_rendering_info.colorAttachmentCount = 1;
-    pipeline_rendering_info.pColorAttachmentFormats = &color_format;
-
-    CreatePipelineHelper pipe(*this, &pipeline_rendering_info);
+    CreatePipelineHelper pipe(*this);
+    pipe.SetDynamicRendering({VK_FORMAT_B8G8R8A8_UNORM});
     pipe.gp_ci_.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
     pipe.gp_ci_.layout = pipeline_layout;
     pipe.CreateGraphicsPipeline();
@@ -2227,7 +2196,7 @@ TEST_F(PositiveDescriptorBuffer, IndependentSetMixShaderObject) {
     vk::CmdSetDescriptorBufferOffsetsEXT(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &index, &offset);
     vk::CmdDraw(m_command_buffer, 3, 1, 0, 0);
 
-    SetDefaultDynamicStatesExclude();
+    SetDefaultDynamicStatesExcludeEXT();
     const VkShaderStageFlagBits stages[] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
     VkShaderEXT shaders[] = {vert_shader, frag_shader};
     vk::CmdBindShadersEXT(m_command_buffer, 2u, stages, shaders);
@@ -2316,4 +2285,48 @@ TEST_F(PositiveDescriptorBuffer, MutableDescriptor) {
     if (!IsPlatformMockICD()) {
         ASSERT_EQ(data[2], 20u);
     }
+}
+
+TEST_F(PositiveDescriptorBuffer, DescriptorAddressRangeAtOffset) {
+    RETURN_IF_SKIP(InitBasicDescriptorBuffer());
+
+    vkt::Buffer buffer(*m_device, 4096, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vkt::device_address);
+    VkDescriptorAddressInfoEXT address_info = vku::InitStructHelper();
+    address_info.address = buffer.Address() + 2048;
+    address_info.range = 2048;
+    address_info.format = VK_FORMAT_UNDEFINED;
+
+    VkDescriptorGetInfoEXT get_info = vku::InitStructHelper();
+    get_info.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    get_info.data.pUniformBuffer = &address_info;
+
+    std::vector<uint8_t> descriptor(descriptor_buffer_properties.uniformBufferDescriptorSize);
+    vk::GetDescriptorEXT(device(), &get_info, descriptor.size(), descriptor.data());
+}
+
+TEST_F(PositiveDescriptorBuffer, NullDescriptorSetLayoutGPL) {
+    AddRequiredExtensions(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::graphicsPipelineLibrary);
+    RETURN_IF_SKIP(InitBasicDescriptorBuffer());
+
+    VkDescriptorSetLayoutBinding binding = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
+    vkt::DescriptorSetLayout dsl(*m_device, binding, VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT);
+
+    VkDescriptorSetLayout set_layouts[2] = {VK_NULL_HANDLE, dsl};
+    VkPipelineLayoutCreateInfo pipeline_layout_ci = vku::InitStructHelper();
+    pipeline_layout_ci.setLayoutCount = 2;
+    pipeline_layout_ci.pSetLayouts = set_layouts;
+    vkt::PipelineLayout pipeline_layout(*m_device, pipeline_layout_ci);
+
+    vkt::Buffer buffer(*m_device, 4096, VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT, vkt::device_address);
+    VkDescriptorBufferBindingInfoEXT dbbi = vku::InitStructHelper();
+    dbbi.address = buffer.Address();
+    dbbi.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+
+    uint32_t index = 0;
+    VkDeviceSize offset = 0;
+    m_command_buffer.Begin();
+    vk::CmdBindDescriptorBuffersEXT(m_command_buffer, 1, &dbbi);
+    vk::CmdSetDescriptorBufferOffsetsEXT(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &index, &offset);
+    m_command_buffer.End();
 }

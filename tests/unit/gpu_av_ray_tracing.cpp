@@ -11,6 +11,7 @@
  *     http://www.apache.org/licenses/LICENSE-2.0
  */
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <vulkan/utility/vk_format_utils.h>
@@ -4399,4 +4400,74 @@ TEST_F(NegativeGpuAVRayTracing, OpReportIntersectionKHRHitKindOutOfRange) {
     auto debug_buffer_ptr = static_cast<uint32_t*>(debug_buffer.Memory().Map());
     ASSERT_GT(debug_buffer_ptr[0], 0u) << "Intersection shader was never invoked";
     debug_buffer.Memory().Unmap();
+}
+
+TEST_F(NegativeGpuAVRayTracing, SelectInstrumentedPipelineRegex) {
+    TEST_DESCRIPTION("Currently not possible, but need to ensure we do not crash");
+    SetTargetApiVersion(VK_API_VERSION_1_2);
+    AddRequiredExtensions(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    AddRequiredExtensions(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::rayTracingPipeline);
+    AddRequiredFeature(vkt::Feature::accelerationStructure);
+    AddRequiredFeature(vkt::Feature::bufferDeviceAddress);
+
+    std::vector<VkLayerSettingEXT> layer_settings(2);
+    layer_settings[0] = {OBJECT_LAYER_NAME, "gpuav_select_instrumented_shaders", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &kVkTrue};
+    std::array<const char*, 1> shader_regexes = {{"ray_tracing_pipeline_foo"}};
+    layer_settings[1] = {OBJECT_LAYER_NAME, "gpuav_shaders_to_instrument", VK_LAYER_SETTING_TYPE_STRING_EXT, size32(shader_regexes),
+                         shader_regexes.data()};
+
+    VkLayerSettingsCreateInfoEXT layer_setting_ci = vku::InitStructHelper();
+    layer_setting_ci.settingCount = size32(layer_settings);
+    layer_setting_ci.pSettings = layer_settings.data();
+
+    VkValidationFeaturesEXT validation_features = GetGpuAvValidationFeatures();
+    validation_features.pNext = &layer_setting_ci;
+    RETURN_IF_SKIP(InitFrameworkForRayTracingTest(&validation_features));
+    if (!CanEnableGpuAV(*this)) {
+        GTEST_SKIP() << "Requirements for GPU-AV are not met";
+    }
+    RETURN_IF_SKIP(InitState());
+
+    vkt::rt::Pipeline pipeline(*this, m_device);
+    pipeline.SetGlslRayGenShader(kRayTracingMinimalGlsl);
+    pipeline.AddBinding(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 0);
+    pipeline.CreateDescriptorSet();
+    pipeline.Build();
+
+    VkDebugUtilsObjectNameInfoEXT name_info = vku::InitStructHelper();
+    name_info.objectType = VK_OBJECT_TYPE_PIPELINE;
+    name_info.pObjectName = "ray_tracing_pipeline_foo";
+    name_info.objectHandle = uint64_t(pipeline.Handle().handle());
+    m_errorMonitor->SetDesiredWarning("Only graphics and compute pipelines can be instrumented after they are created");
+    vk::SetDebugUtilsObjectNameEXT(device(), &name_info);
+    m_errorMonitor->VerifyFound();
+}
+
+TEST_F(NegativeGpuAVRayTracing, TlasBuildReferencingUnbuiltBlas) {
+    TEST_DESCRIPTION("Reference a BLAS that was created but never built in a TLAS build.");
+    SetTargetApiVersion(VK_API_VERSION_1_2);
+    AddRequiredExtensions(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::accelerationStructure);
+    AddRequiredFeature(vkt::Feature::bufferDeviceAddress);
+    VkValidationFeaturesEXT validation_features = GetGpuAvValidationFeatures();
+    RETURN_IF_SKIP(InitFrameworkForRayTracingTest(&validation_features));
+    if (!CanEnableGpuAV(*this)) {
+        GTEST_SKIP() << "Requirements for GPU-AV are not met";
+    }
+    RETURN_IF_SKIP(InitState());
+
+    // Create BLAS handle, but do not build it
+    vkt::as::BuildGeometryInfoKHR blas = vkt::as::blueprint::BuildGeometryInfoSimpleOnDeviceBottomLevel(*m_device);
+    blas.SetupBuild(true);
+
+    vkt::as::BuildGeometryInfoKHR tlas = vkt::as::blueprint::BuildGeometryInfoSimpleOnDeviceTopLevel(*m_device, *blas.GetDstAS());
+    m_command_buffer.Begin();
+    tlas.BuildCmdBuffer(m_command_buffer);
+    m_command_buffer.End();
+
+    m_default_queue->Submit(m_command_buffer);
+    m_errorMonitor->SetDesiredError("UNASSIGNED-BLAS-not-built");
+    m_device->Wait();
+    m_errorMonitor->VerifyFound();
 }

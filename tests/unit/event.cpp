@@ -739,42 +739,6 @@ TEST_F(NegativeEvent, WaitEventRenderPassHostBit) {
     m_command_buffer.End();
 }
 
-TEST_F(NegativeEvent, ResetEventThenHostSet) {
-    TEST_DESCRIPTION("Submit event reset then set it on the host");
-    RETURN_IF_SKIP(Init());
-
-    vkt::Event event(*m_device);
-
-    m_command_buffer.Begin();
-    m_command_buffer.ResetEvent(event);
-    m_command_buffer.End();
-    m_default_queue->Submit(m_command_buffer);
-
-    m_errorMonitor->SetDesiredError("VUID-vkSetEvent-event-09543");
-    event.Set();
-    m_errorMonitor->VerifyFound();
-
-    m_default_queue->Wait();
-}
-
-TEST_F(NegativeEvent, SetEventThenHostSet) {
-    TEST_DESCRIPTION("Submit event set then set it on the host");
-    RETURN_IF_SKIP(Init());
-
-    vkt::Event event(*m_device);
-
-    m_command_buffer.Begin();
-    m_command_buffer.SetEvent(event);
-    m_command_buffer.End();
-    m_default_queue->Submit(m_command_buffer);
-
-    m_errorMonitor->SetDesiredError("VUID-vkSetEvent-event-09543");
-    event.Set();
-    m_errorMonitor->VerifyFound();
-
-    m_default_queue->Wait();
-}
-
 TEST_F(NegativeEvent, WaitEventThenHostSet) {
     TEST_DESCRIPTION("Submit event wait then set it on the host");
     RETURN_IF_SKIP(Init());
@@ -790,6 +754,27 @@ TEST_F(NegativeEvent, WaitEventThenHostSet) {
     event.Set();
     m_errorMonitor->VerifyFound();
 
+    m_default_queue->Wait();
+}
+
+TEST_F(NegativeEvent, WaitEventThenHostSetMultipleCBs) {
+    RETURN_IF_SKIP(Init());
+    vkt::Event event(*m_device);
+
+    vkt::CommandBuffer set_cb(*m_device, m_command_pool);
+    set_cb.Begin();
+    set_cb.SetEvent(event);
+    set_cb.End();
+
+    vkt::CommandBuffer wait_cb(*m_device, m_command_pool);
+    wait_cb.Begin();
+    wait_cb.WaitEvent(event);
+    wait_cb.End();
+
+    m_default_queue->Submit({set_cb, wait_cb});
+    m_errorMonitor->SetDesiredError("VUID-vkSetEvent-event-09543");
+    event.Set();
+    m_errorMonitor->VerifyFound();
     m_default_queue->Wait();
 }
 
@@ -991,6 +976,54 @@ TEST_F(NegativeEvent, MismatchedDependencyInfo2) {
 
     m_errorMonitor->SetDesiredError("VUID-vkCmdWaitEvents2-pEvents-10788");
     vk::QueueSubmit(*m_default_queue, 1, &submit_info, VK_NULL_HANDLE);
+    m_errorMonitor->VerifyFound();
+    m_default_queue->Wait();
+}
+
+TEST_F(NegativeEvent, MismatchedDependencyInfoMultipleBarriers) {
+    SetTargetApiVersion(VK_API_VERSION_1_3);
+    AddRequiredExtensions(VK_KHR_MAINTENANCE_9_EXTENSION_NAME);
+    AddRequiredExtensions(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::maintenance9);
+    AddRequiredFeature(vkt::Feature::synchronization2);
+    RETURN_IF_SKIP(Init());
+
+    vkt::Image image(*m_device, 32, 32, VK_FORMAT_R8G8B8A8_UNORM,
+                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
+
+    VkMemoryBarrier2 memory_barrier = vku::InitStructHelper();
+    memory_barrier.srcStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    memory_barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+
+    VkImageMemoryBarrier2 image_barrier = vku::InitStructHelper();
+    image_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    image_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    image_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+    image_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    image_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    image_barrier.image = image;
+    image_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkDependencyInfo dependency_info = vku::InitStructHelper();
+    dependency_info.memoryBarrierCount = 1u;
+    dependency_info.pMemoryBarriers = &memory_barrier;
+    dependency_info.imageMemoryBarrierCount = 1u;
+    dependency_info.pImageMemoryBarriers = &image_barrier;
+
+    const vkt::Event event(*m_device);
+
+    m_command_buffer.Begin();
+    vk::CmdSetEvent2(m_command_buffer, event, &dependency_info);
+
+    memory_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    image_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    vk::CmdWaitEvents2(m_command_buffer, 1, &event.handle(), &dependency_info);
+
+    m_command_buffer.End();
+
+    m_errorMonitor->SetDesiredError("VUID-vkCmdWaitEvents2-pEvents-10788");
+    m_default_queue->Submit(m_command_buffer);
     m_errorMonitor->VerifyFound();
     m_default_queue->Wait();
 }
@@ -1953,8 +1986,7 @@ TEST_F(NegativeEvent, HostResetPendingWaitAndReset) {
     m_command_buffer.Begin();
     m_command_buffer.SetEvent(event);
     m_command_buffer.WaitEvent(event);
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
-                           0, nullptr, 0, nullptr);
+    m_command_buffer.ExecutionBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     m_command_buffer.ResetEvent(event);
     m_command_buffer.End();
     m_default_queue->Submit(m_command_buffer);

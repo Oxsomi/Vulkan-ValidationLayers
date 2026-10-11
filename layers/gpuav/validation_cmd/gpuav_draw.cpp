@@ -29,6 +29,7 @@
 #include "gpuav/shaders/gpuav_error_header.h"
 #include "gpuav/shaders/validation_cmd/push_data.h"
 #include "generated/gpuav_offline_spirv.h"
+#include "utils/vk_api_utils.h"
 
 namespace gpuav {
 namespace valcmd {
@@ -728,8 +729,7 @@ struct DrawIndexedIndirectIndexBufferShader {
 
     static std::vector<VkDescriptorSetLayoutBinding> GetDescriptorSetLayoutBindings() {
         return {{glsl::kPreDrawBinding_IndirectBuffer, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {glsl::kPreDrawBinding_CountBuffer, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-                {glsl::kPreDrawBinding_IndexBuffer, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+                {glsl::kPreDrawBinding_CountBuffer, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
     }
 
     std::vector<VkWriteDescriptorSet> GetDescriptorWrites() const {

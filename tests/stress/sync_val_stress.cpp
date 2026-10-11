@@ -12,8 +12,6 @@
  */
 
 #include "../framework/sync_val_tests.h"
-#include "../framework/descriptor_helper.h"
-#include "layer_validation_tests.h"
 
 class StressSyncVal : public VkLayerTest {
   public:
@@ -29,7 +27,9 @@ void StressSyncVal::InitSyncVal() {
     std::vector<VkLayerSettingEXT> settings;
 
     settings.emplace_back(
-        VkLayerSettingEXT{OBJECT_LAYER_NAME, "syncval_submit_time_validation", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &kVkTrue});
+        VkLayerSettingEXT{OBJECT_LAYER_NAME, "syncval_full_validation", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &kVkTrue});
+    settings.emplace_back(
+        VkLayerSettingEXT{OBJECT_LAYER_NAME, "syncval_record_time_validation", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &kVkTrue});
     settings.emplace_back(
         VkLayerSettingEXT{OBJECT_LAYER_NAME, "syncval_shader_accesses_heuristic", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &kVkTrue});
 

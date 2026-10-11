@@ -97,13 +97,13 @@ class HazardDetector {
     HazardDetector(SyncAccessIndex access_index, const AccessContext& access_context)
         : access_info_(GetAccessInfo(access_index)), access_context_(access_context) {}
 
-    HazardResult Detect(const AccessMap::const_iterator& pos) const {
-        return DoDetect(access_context_, pos->second,
+    HazardResult Detect(const AccessRange&, const AccessState& state) const {
+        return DoDetect(access_context_, state,
                         [this](const AccessState& access_state) { return access_state.DetectHazard(access_info_); });
     }
 
-    HazardResult DetectAsync(const AccessMap::const_iterator& pos, ResourceUsageTag start_tag, QueueId queue_id) const {
-        return DoDetect(access_context_, pos->second, [this, start_tag, queue_id](const AccessState& access_state) {
+    HazardResult DetectAsync(const AccessState& state, ResourceUsageTag start_tag, QueueId queue_id) const {
+        return DoDetect(access_context_, state, [this, start_tag, queue_id](const AccessState& access_state) {
             return access_state.DetectAsyncHazard(access_info_, start_tag, queue_id);
         });
     }
@@ -116,22 +116,23 @@ class HazardDetector {
 class HazardDetectorAttachment {
   public:
     HazardDetectorAttachment(SyncAccessIndex access_index, const AttachmentAccess& attachment_access,
-                             const AccessContext& access_context, bool detect_load_op_after_store_op_hazards)
+                             const AccessContext& access_context, QueueId queue_id, bool detect_load_op_after_store_op_hazards)
         : access_info_(GetAccessInfo(access_index)),
           attachment_access_(attachment_access),
           access_context_(access_context),
-          detect_load_op_after_store_op_hazards(detect_load_op_after_store_op_hazards) {}
+          queue_id_(queue_id),
+          detect_load_op_after_store_op_hazards_(detect_load_op_after_store_op_hazards) {}
 
-    HazardResult Detect(const AccessMap::const_iterator& pos) const {
+    HazardResult Detect(const AccessRange&, const AccessState& state) const {
         const OrderingBarrier& ordering = GetOrderingRules(attachment_access_.ordering);
-        return DoDetect(access_context_, pos->second, [this, &ordering](const AccessState& access_state) {
-            return access_state.DetectHazard(access_info_, ordering, attachment_access_, 0, kQueueIdInvalid,
-                                             detect_load_op_after_store_op_hazards);
+        return DoDetect(access_context_, state, [this, &ordering](const AccessState& access_state) {
+            return access_state.DetectHazard(access_info_, ordering, attachment_access_, 0, queue_id_,
+                                             detect_load_op_after_store_op_hazards_);
         });
     }
 
-    HazardResult DetectAsync(const AccessMap::const_iterator& pos, ResourceUsageTag start_tag, QueueId queue_id) const {
-        return DoDetect(access_context_, pos->second, [this, start_tag, queue_id](const AccessState& access_state) {
+    HazardResult DetectAsync(const AccessState& state, ResourceUsageTag start_tag, QueueId queue_id) const {
+        return DoDetect(access_context_, state, [this, start_tag, queue_id](const AccessState& access_state) {
             return access_state.DetectAsyncHazard(access_info_, start_tag, queue_id);
         });
     }
@@ -140,49 +141,19 @@ class HazardDetectorAttachment {
     const SyncAccessInfo& access_info_;
     const AttachmentAccess attachment_access_;
     const AccessContext& access_context_;
-    const bool detect_load_op_after_store_op_hazards;
-};
-
-class HazardDetectFirstUse {
-  public:
-    HazardDetectFirstUse(const AccessState& recorded_use, QueueId queue_id, const ResourceUsageRange& tag_range,
-                         const AccessContext& access_context, bool detect_load_op_after_store_op_hazards)
-        : recorded_use_(recorded_use),
-          queue_id_(queue_id),
-          tag_range_(tag_range),
-          access_context_(access_context),
-          detect_load_op_after_store_op_hazards(detect_load_op_after_store_op_hazards) {}
-
-    HazardResult Detect(const AccessMap::const_iterator& pos) const {
-        return DoDetect(access_context_, pos->second, [this](const AccessState& access_state) {
-            return access_state.DetectHazard(recorded_use_, queue_id_, tag_range_, detect_load_op_after_store_op_hazards);
-        });
-    }
-
-    HazardResult DetectAsync(const AccessMap::const_iterator& pos, ResourceUsageTag start_tag, QueueId queue_id) const {
-        return DoDetect(access_context_, pos->second, [this, start_tag, queue_id](const AccessState& access_state) {
-            return access_state.DetectAsyncHazard(recorded_use_, tag_range_, start_tag, queue_id);
-        });
-    }
-
-  private:
-    const AccessState& recorded_use_;
     const QueueId queue_id_;
-    const ResourceUsageRange& tag_range_;
-    const AccessContext& access_context_;
-    const bool detect_load_op_after_store_op_hazards;
+    const bool detect_load_op_after_store_op_hazards_;
 };
 
 struct HazardDetectorMarker {
     HazardDetectorMarker(const AccessContext& access_context) : access_context(access_context) {}
 
-    HazardResult Detect(const AccessMap::const_iterator& pos) const {
-        return DoDetect(access_context, pos->second,
-                        [](const AccessState& access_state) { return access_state.DetectMarkerHazard(); });
+    HazardResult Detect(const AccessRange&, const AccessState& state) const {
+        return DoDetect(access_context, state, [](const AccessState& access_state) { return access_state.DetectMarkerHazard(); });
     }
 
-    HazardResult DetectAsync(const AccessMap::const_iterator& pos, ResourceUsageTag start_tag, QueueId queue_id) const {
-        return DoDetect(access_context, pos->second, [start_tag, queue_id](const AccessState& access_state) {
+    HazardResult DetectAsync(const AccessState& state, ResourceUsageTag start_tag, QueueId queue_id) const {
+        return DoDetect(access_context, state, [start_tag, queue_id](const AccessState& access_state) {
             return access_state.DetectAsyncHazard(GetAccessInfo(SYNC_COPY_TRANSFER_WRITE), start_tag, queue_id);
         });
     }
@@ -193,20 +164,21 @@ struct HazardDetectorMarker {
 class BarrierHazardDetector {
   public:
     BarrierHazardDetector(const AccessContext& access_context, SyncAccessIndex access_index, VkPipelineStageFlags2 src_exec_scope,
-                          SyncAccessFlags src_access_scope)
+                          SyncAccessFlags src_access_scope, QueueId queue_id)
         : access_context_(access_context),
           access_info_(GetAccessInfo(access_index)),
           src_exec_scope_(src_exec_scope),
-          src_access_scope_(src_access_scope) {}
+          src_access_scope_(src_access_scope),
+          queue_id_(queue_id) {}
 
-    HazardResult Detect(const AccessMap::const_iterator& pos) const {
-        return DoDetect(access_context_, pos->second, [this](const AccessState& access_state) {
-            return access_state.DetectBarrierHazard(access_info_, kQueueIdInvalid, src_exec_scope_, src_access_scope_);
+    HazardResult Detect(const AccessRange&, const AccessState& state) const {
+        return DoDetect(access_context_, state, [this](const AccessState& access_state) {
+            return access_state.DetectBarrierHazard(access_info_, queue_id_, src_exec_scope_, src_access_scope_);
         });
     }
 
-    HazardResult DetectAsync(const AccessMap::const_iterator& pos, ResourceUsageTag start_tag, QueueId queue_id) const {
-        return DoDetect(access_context_, pos->second, [this, start_tag, queue_id](const AccessState& access_state) {
+    HazardResult DetectAsync(const AccessState& state, ResourceUsageTag start_tag, QueueId queue_id) const {
+        return DoDetect(access_context_, state, [this, start_tag, queue_id](const AccessState& access_state) {
             return access_state.DetectAsyncHazard(access_info_, start_tag, queue_id);
         });
     }
@@ -216,6 +188,7 @@ class BarrierHazardDetector {
     const SyncAccessInfo& access_info_;
     VkPipelineStageFlags2 src_exec_scope_;
     SyncAccessFlags src_access_scope_;
+    QueueId queue_id_;
 };
 
 class EventBarrierHazardDetector {
@@ -231,11 +204,8 @@ class EventBarrierHazardDetector {
           scope_pos_(event_scope.begin()),
           scope_end_(event_scope.end()) {}
 
-    HazardResult Detect(const AccessMap::const_iterator& pos) {
-        // Need to piece together coverage of pos->first range:
-        // Copy the range as we'll be chopping it up as needed
-        AccessRange range = pos->first;
-        const AccessState& access = pos->second;
+    HazardResult Detect(AccessRange range, const AccessState& access) {
+        // Piece together event-scope coverage of the supplied range
         HazardResult hazard;
 
         bool in_scope = AdvanceScope(range);
@@ -264,9 +234,9 @@ class EventBarrierHazardDetector {
         return hazard;
     }
 
-    HazardResult DetectAsync(const AccessMap::const_iterator& pos, ResourceUsageTag start_tag, QueueId queue_id) const {
+    HazardResult DetectAsync(const AccessState& state, ResourceUsageTag start_tag, QueueId queue_id) const {
         // Async barrier hazard detection can use the same path as the usage index is not IsRead, but is IsWrite
-        return pos->second.DetectAsyncHazard(access_info_, start_tag, queue_id);
+        return state.DetectAsyncHazard(access_info_, start_tag, queue_id);
     }
 
   private:
@@ -346,24 +316,34 @@ HazardResult AccessContext::DetectHazard(const vvl::ImageView& image_view, const
 }
 
 HazardResult AccessContext::DetectAttachmentHazard(ImageRangeGen& range_gen, SyncAccessIndex current_usage,
-                                                   const AttachmentAccess& attachment_access) const {
-    HazardDetectorAttachment detector(current_usage, attachment_access, *this,
+                                                   const AttachmentAccess& attachment_access, QueueId queue_id) const {
+    HazardDetectorAttachment detector(current_usage, attachment_access, *this, queue_id,
                                       validator->syncval_settings.load_op_after_store_op_validation);
     return DetectHazardGeneratedRangeGen(detector, range_gen, DetectOptions::kDetectAll);
 }
 
 HazardResult AccessContext::DetectAttachmentHazard(const AttachmentViewGen& view_gen, AttachmentViewGen::Gen gen_type,
                                                    SyncAccessIndex current_usage, const AttachmentAccess& attachment_access,
-                                                   uint32_t view_mask) const {
+                                                   uint32_t view_mask, QueueId queue_id) const {
     if (view_mask == 0) {
-        ImageRangeGen range_gen = view_gen.GetRangeGen(gen_type);
-        return DetectAttachmentHazard(range_gen, current_usage, attachment_access);
+        const bool draw_access = attachment_access.type == AttachmentAccessType::Access;
+        const AttachmentViewGen::Gen optimized_gen_type = draw_access ? view_gen.GetOptimizedDrawGen(gen_type) : gen_type;
+        ImageRangeGen range_gen = view_gen.GetRangeGen(optimized_gen_type);
+        HazardResult hazard = DetectAttachmentHazard(range_gen, current_usage, attachment_access, queue_id);
+
+        // LOAD only reads the render area. If the full-subresource write reports a hazard,
+        // validate the draw over the render area.
+        if (hazard.IsHazard() && optimized_gen_type != gen_type && view_gen.DrawOptimizationNeedsHazardCheck(gen_type)) {
+            range_gen = view_gen.GetRangeGen(gen_type);
+            hazard = DetectAttachmentHazard(range_gen, current_usage, attachment_access, queue_id);
+        }
+        return hazard;
     } else {
         uint32_t view_index = 0;
         while (view_mask) {
             if (view_mask & 1) {
                 ImageRangeGen range_gen = view_gen.GetRangeGen(gen_type, view_index);
-                auto hazard = DetectAttachmentHazard(range_gen, current_usage, attachment_access);
+                auto hazard = DetectAttachmentHazard(range_gen, current_usage, attachment_access, queue_id);
                 if (hazard.IsHazard()) {
                     return hazard;
                 }
@@ -377,17 +357,17 @@ HazardResult AccessContext::DetectAttachmentHazard(const AttachmentViewGen& view
 
 HazardResult AccessContext::DetectAttachmentHazard(const vvl::Image& image, const VkImageSubresourceRange& subresource_range,
                                                    bool is_depth_sliced, SyncAccessIndex current_usage,
-                                                   const AttachmentAccess& attachment_access) const {
+                                                   const AttachmentAccess& attachment_access, QueueId queue_id) const {
     const auto& sub_state = SubState(image);
-    HazardDetectorAttachment detector(current_usage, attachment_access, *this, false);
+    HazardDetectorAttachment detector(current_usage, attachment_access, *this, queue_id, false);
     ImageRangeGen range_gen = sub_state.MakeImageRangeGen(subresource_range, is_depth_sliced);
     return DetectHazardGeneratedRangeGen(detector, range_gen, DetectOptions::kDetectAll);
 }
 
 HazardResult AccessContext::DetectAttachmentHazard(const vvl::ImageView& image_view, const VkOffset3D& offset,
                                                    const VkExtent3D& extent, SyncAccessIndex current_usage,
-                                                   const AttachmentAccess& attachment_access) const {
-    HazardDetectorAttachment detector(current_usage, attachment_access, *this,
+                                                   const AttachmentAccess& attachment_access, QueueId queue_id) const {
+    HazardDetectorAttachment detector(current_usage, attachment_access, *this, queue_id,
                                       validator->syncval_settings.load_op_after_store_op_validation);
     ImageRangeGen range_gen(MakeImageRangeGen(image_view, offset, extent));
     return DetectHazardGeneratedRangeGen(detector, range_gen, DetectOptions::kDetectAll);
@@ -406,16 +386,17 @@ HazardResult AccessContext::DetectImageBarrierHazard(const vvl::Image& image, co
 HazardResult AccessContext::DetectImageBarrierHazard(const vvl::Image& image, VkPipelineStageFlags2 src_exec_scope,
                                                      const SyncAccessFlags& src_access_scope,
                                                      const VkImageSubresourceRange& subresource_range, bool is_depth_sliced,
-                                                     const DetectOptions options) const {
-    BarrierHazardDetector detector(*this, SyncAccessIndex::SYNC_IMAGE_LAYOUT_TRANSITION, src_exec_scope, src_access_scope);
+                                                     const DetectOptions options, QueueId queue_id) const {
+    BarrierHazardDetector detector(*this, SyncAccessIndex::SYNC_IMAGE_LAYOUT_TRANSITION, src_exec_scope, src_access_scope,
+                                   queue_id);
     ImageRangeGen range_gen = SubState(image).MakeImageRangeGen(subresource_range, is_depth_sliced);
     return DetectHazardGeneratedRangeGen(detector, range_gen, options);
 }
 
 HazardResult AccessContext::DetectImageBarrierHazard(const AttachmentViewGen& view_gen, const SyncBarrier& barrier,
-                                                     DetectOptions options) const {
+                                                     DetectOptions options, QueueId queue_id) const {
     BarrierHazardDetector detector(*this, SyncAccessIndex::SYNC_IMAGE_LAYOUT_TRANSITION, barrier.src_exec_scope.exec_scope,
-                                   barrier.src_access_scope);
+                                   barrier.src_access_scope, queue_id);
     ImageRangeGen range_gen = view_gen.GetRangeGen(AttachmentViewGen::Gen::kViewSubresource);
     return DetectHazardGeneratedRangeGen(detector, range_gen, options);
 }
@@ -426,81 +407,15 @@ HazardResult AccessContext::DetectSubpassTransitionHazard(const SubpassBarrier& 
     // Hazard detection for the transition can be against the merged of the barriers (it only uses src_...)
     const SyncBarrier merged_barrier(subpass_barrier.barriers);
     const AccessContext& src_subpass_context = *subpass_barrier.src_subpass_context;
-    HazardResult hazard = src_subpass_context.DetectImageBarrierHazard(attach_view, merged_barrier, kDetectPrevious);
+    HazardResult hazard = src_subpass_context.DetectImageBarrierHazard(attach_view, merged_barrier, kDetectPrevious,
+                                                                       subpass_barrier.queue_id);
     if (!hazard.IsHazard()) {
         // The Async hazard check is against the current context's async set.
         SyncBarrier null_barrier = {};
-        hazard = DetectImageBarrierHazard(attach_view, null_barrier, kDetectAsync);
+        hazard = DetectImageBarrierHazard(attach_view, null_barrier, kDetectAsync, subpass_barrier.queue_id);
     }
 
     return hazard;
-}
-
-// This is called with the *recorded* command buffers access context, with the
-// *active* access context pass in, againsts which hazards will be detected
-HazardResult AccessContext::DetectFirstUseHazard(QueueId queue_id, const ResourceUsageRange& tag_range,
-                                                 const AccessContext& access_context) const {
-    // If the context is finalized we have a fast path to find first accesses within a range
-    if (finalized_) {
-        for (const auto& single_tag : sorted_first_accesses_.IterateSingleTagFirstAccesses(tag_range)) {
-            const AccessRange access_range = single_tag.p_key_value->first;
-            const AccessState& access = single_tag.p_key_value->second;
-
-            // For single tag first accesses we have exact search and can assert the find
-            assert(access.FirstAccessInTagRange(tag_range));
-
-            HazardDetectFirstUse detector(access, queue_id, tag_range, access_context,
-                                          validator->syncval_settings.load_op_after_store_op_validation);
-            HazardResult hazard = access_context.DetectHazardRange(detector, access_range, DetectOptions::kDetectAll);
-            if (hazard.IsHazard()) {
-                return hazard;
-            }
-        }
-        for (const auto& multi_tag : sorted_first_accesses_.IterateMultiTagFirstAccesses(tag_range)) {
-            const AccessRange access_range = multi_tag.p_key_value->first;
-            const AccessState& access = multi_tag.p_key_value->second;
-
-            // For multi tag first accesses the search is not exact, so we need to check for range inclusion
-            // (on average multi tag search is faster than going over the entire access map)
-            if (!access.FirstAccessInTagRange(tag_range)) {
-                continue;
-            }
-
-            HazardDetectFirstUse detector(access, queue_id, tag_range, access_context,
-                                          validator->syncval_settings.load_op_after_store_op_validation);
-            HazardResult hazard = access_context.DetectHazardRange(detector, access_range, DetectOptions::kDetectAll);
-            if (hazard.IsHazard()) {
-                return hazard;
-            }
-        }
-    }
-    // The context is not finalized. We have to iterate over the entire access map
-    else {
-        for (const auto& recorded_access : access_state_map_) {
-            // Cull any entries not in the current tag range
-            if (!recorded_access.second.FirstAccessInTagRange(tag_range)) {
-                continue;
-            }
-            HazardDetectFirstUse detector(recorded_access.second, queue_id, tag_range, access_context,
-                                          validator->syncval_settings.load_op_after_store_op_validation);
-            HazardResult hazard = access_context.DetectHazardRange(detector, recorded_access.first, DetectOptions::kDetectAll);
-            if (hazard.IsHazard()) {
-                return hazard;
-            }
-        }
-    }
-    return {};
-}
-
-HazardResult AccessContext::DetectVideoHazard(const vvl::VideoSession& vs_state, const vvl::VideoPictureResource& resource,
-                                              SyncAccessIndex current_usage) const {
-    const vvl::Image& image = *resource.image_state.get();
-    const auto& sub_state = SubState(image);
-    const auto offset = resource.GetEffectiveImageOffset(vs_state);
-    const auto extent = resource.GetEffectiveImageExtent(vs_state);
-    ImageRangeGen range_gen(sub_state.MakeImageRangeGen(resource.range, offset, extent, false));
-    HazardDetector detector(current_usage, *this);
-    return DetectHazardGeneratedRangeGen(detector, range_gen, DetectOptions::kDetectAll);
 }
 
 HazardResult AccessContext::DetectMarkerHazard(const vvl::Buffer& buffer, const AccessRange& range) const {
@@ -569,7 +484,7 @@ HazardResult AccessContext::DetectAsyncHazard(const Detector& detector, const Ac
     HazardResult hazard;
     auto pos = access_state_map_.LowerBound(range.begin);
     if (pos != access_state_map_.end() && pos->first.begin < range.end) {
-        hazard = detector.DetectAsync(pos, async_tag, async_queue_id);
+        hazard = detector.DetectAsync(pos->second, async_tag, async_queue_id);
     }
     return hazard;
 }
@@ -583,7 +498,7 @@ HazardResult AccessContext::DetectAsyncHazard(const Detector& detector, ImageRan
     auto do_async_hazard_check = [&detector, async_tag, async_queue_id, &hazard](const ImageRangeGen::RangeType& range,
                                                                                  const ConstIterator& end, ConstIterator& pos) {
         while (pos != end && pos->first.begin < range.end) {
-            hazard = detector.DetectAsync(pos, async_tag, async_queue_id);
+            hazard = detector.DetectAsync(pos->second, async_tag, async_queue_id);
             if (hazard.IsHazard()) return true;
             ++pos;
         }
@@ -614,7 +529,7 @@ HazardResult AccessContext::DetectHazardOneRange(Detector& detector, bool detect
             gap.begin = pos->first.end;
         }
 
-        hazard = detector.Detect(pos);
+        hazard = detector.Detect(pos->first, pos->second);
         if (hazard.IsHazard()) return hazard;
         ++pos;
     }
@@ -638,14 +553,9 @@ HazardResult AccessContext::DetectPreviousHazard(Detector& detector, const Acces
     AccessContext descent_context;
     ResolveSubpassDependencies(range, descent_context, false);
 
-    AccessMap& descent_map = descent_context.access_state_map_;
-    for (auto prev = descent_map.begin(); prev != descent_map.end(); ++prev) {
-        HazardResult hazard = detector.Detect(prev);
-        if (hazard.IsHazard()) {
-            return hazard;
-        }
-    }
-    return {};
+    const AccessMap& descent_map = descent_context.access_state_map_;
+    auto prev = descent_map.begin();
+    return DetectHazardOneRange(detector, false, prev, descent_map.end(), range);
 }
 
 }  // namespace syncval

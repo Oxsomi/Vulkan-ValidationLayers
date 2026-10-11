@@ -55,10 +55,9 @@ TEST_F(PositiveGpuAVCopies, CopyBufferToImageD32) {
                              &buffer_image_copy_1);
 
     VkMemoryBarrier barrier = vku::InitStructHelper();
-    barrier.srcAccessMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    barrier.dstAccessMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
-                           nullptr, 0, nullptr);
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    m_command_buffer.Barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, barrier);
 
     VkBufferImageCopy buffer_image_copy_2 = buffer_image_copy_1;
     buffer_image_copy_2.imageOffset = {32, 32, 0};
@@ -243,25 +242,22 @@ TEST_F(PositiveGpuAVCopies, BatchSubmit) {
     vkt::CommandBuffer cb_2(*m_device, m_command_pool);
 
     VkMemoryBarrier barrier = vku::InitStructHelper();
-    barrier.srcAccessMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    barrier.dstAccessMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 
     cb_0.Begin();
-    vk::CmdPipelineBarrier(cb_0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0,
-                           nullptr);
+    cb_0.Barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, barrier);
     vk::CmdCopyBufferToImage2KHR(cb_0, &buffer_image_copy);
     cb_0.End();
 
     cb_1.Begin();
-    vk::CmdPipelineBarrier(cb_1, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0,
-                           nullptr);
+    cb_1.Barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, barrier);
 
     vk::CmdCopyBufferToImage2KHR(cb_1, &buffer_image_copy);
     cb_1.End();
 
     cb_2.Begin();
-    vk::CmdPipelineBarrier(cb_2, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0,
-                           nullptr);
+    cb_2.Barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, barrier);
     vk::CmdCopyBufferToImage2KHR(cb_2, &buffer_image_copy);
     cb_2.End();
 
@@ -275,4 +271,40 @@ TEST_F(PositiveGpuAVCopies, BatchSubmit) {
 
     m_default_queue->Submit({cb_2, cb_1, cb_0});
     m_default_queue->Wait();
+}
+
+// https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/13040
+// This will fail self-validation with VU 13122
+TEST_F(PositiveGpuAVCopies, DISABLED_MemoryToImageIndexBufferUsage) {
+    SetTargetApiVersion(VK_API_VERSION_1_3);
+    AddRequiredExtensions(VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::deviceAddressCommands);
+    AddRequiredFeature(vkt::Feature::bufferDeviceAddress);
+    RETURN_IF_SKIP(InitGpuAvFramework());
+    RETURN_IF_SKIP(InitState());
+
+    vkt::Buffer buffer(*m_device, 32u * 32u * 4u, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       vkt::device_address);
+    vkt::Image image(*m_device, 32u, 32u, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+    VkDeviceMemoryImageCopyKHR region = vku::InitStructHelper();
+    region.addressRange = buffer.AddressRange();
+    region.addressFlags = 0u;
+    region.addressRowLength = 0u;
+    region.addressImageHeight = 0u;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = {32u, 32u, 1u};
+
+    VkCopyDeviceMemoryImageInfoKHR copy_memory_info = vku::InitStructHelper();
+    copy_memory_info.image = image;
+    copy_memory_info.regionCount = 1u;
+    copy_memory_info.pRegions = &region;
+
+    m_command_buffer.Begin();
+    image.SetLayout(m_command_buffer, VK_IMAGE_LAYOUT_GENERAL);
+    vk::CmdCopyMemoryToImageKHR(m_command_buffer, &copy_memory_info);
+    m_command_buffer.End();
+    m_default_queue->SubmitAndWait(m_command_buffer);
 }

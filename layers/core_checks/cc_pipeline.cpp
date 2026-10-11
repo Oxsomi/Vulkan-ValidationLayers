@@ -78,7 +78,7 @@ bool CoreChecks::ValidatePipelineRobustnessCreateInfo(const vvl::Pipeline& pipel
     }
 
     // These validation depend if the features are exposed (not just enabled)
-    if (!device_state->special_supported.robust_image_access &&
+    if (!IsExtSupported(extensions.vk_ext_image_robustness) &&
         pipeline_robustness_info.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS) {
         skip |= LogError("VUID-VkPipelineRobustnessCreateInfo-robustImageAccess-06930", device,
                          loc.pNext(Struct::VkPipelineRobustnessCreateInfo, Field::images),
@@ -200,7 +200,7 @@ bool CoreChecks::ValidatePipelineExecutableInfo(VkDevice device, const VkPipelin
                              loc.dot(Field::pExecutableInfo).dot(Field::executableIndex),
                              "(%" PRIu32
                              ") must be less than the number of executables associated with "
-                             "the pipeline (%" PRIu32 ") as returned by vkGetPipelineExecutablePropertiessKHR.",
+                             "the pipeline (%" PRIu32 ") as returned by vkGetPipelineExecutablePropertiesKHR.",
                              pExecutableInfo->executableIndex, executable_count);
         }
     }
@@ -315,14 +315,14 @@ bool CoreChecks::ValidateCmdBindPipelineRenderPassMultisample(const vvl::Command
     if (!enabled_features.variableMultisampleRate) {
         // if render pass uses no attachment, verify that all bound pipelines referencing this subpass have the same
         // pMultisampleState->rasterizationSamples.
-        if (rp_state.UsesNoAttachment(subpass)) {
+        if (rp_state.UsesNoAttachment(subpass) && !pipeline_state.IsDynamic(CB_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT)) {
             // If execution ends up here, GetActiveSubpassRasterizationSampleCount() can still be empty if this is
             // the first bound pipeline with the previous conditions holding. Rasterization samples count for the
             // subpass will be updated in PostCallRecordCmdBindPipeline, if it is empty.
             if (std::optional<VkSampleCountFlagBits> subpass_rasterization_samples =
                     cb_state.GetActiveSubpassRasterizationSampleCount();
                 subpass_rasterization_samples && *subpass_rasterization_samples != multisample_state->rasterizationSamples) {
-                const LogObjectList objlist(device, rp_state.Handle(), pipeline_state.Handle());
+                const LogObjectList objlist(cb_state.Handle(), rp_state.Handle(), pipeline_state.Handle());
                 skip |= LogError("VUID-vkCmdBindPipeline-pipeline-00781", objlist, loc,
                                  "variableMultisampleRate is VK_FALSE "
                                  "and "
@@ -359,7 +359,7 @@ bool CoreChecks::PreCallValidateCmdBindPipeline(VkCommandBuffer commandBuffer, V
             : pipelineBindPoint == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR ? "VUID-vkCmdBindPipeline-pipelineBindPoint-02392"
             : pipelineBindPoint == VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM  ? "VUID-vkCmdBindPipeline-pipelineBindPoint-09911"
                                                                           : kVUIDUndefined;
-        skip |= LogError(vuid, objlist, error_obj.location.dot(Field::pipelineBindPoint), "is %s but %s is created as %s.",
+        skip |= LogError(vuid, objlist, error_obj.location.dot(Field::pipelineBindPoint), "is %s but %s was created as %s.",
                          string_VkPipelineBindPoint(pipelineBindPoint), FormatHandle(pipeline).c_str(),
                          string_VkPipelineBindPoint(pipeline_state.pipeline_type));
     } else {
@@ -598,9 +598,9 @@ bool CoreChecks::ValidateShaderStageMaxResources(VkShaderStageFlagBits stage, co
             vuid = "VUID-VkGraphicsPipelineCreateInfo-layout-01688";
         }
         skip |= LogError(vuid, device, loc,
-                         "%s exceeds component limit "
-                         "VkPhysicalDeviceLimits::maxPerStageResources (%" PRIu32 ")",
-                         string_VkShaderStageFlagBits(stage), phys_dev_props.limits.maxPerStageResources);
+                         "%s uses %" PRIu32
+                         " resources which exceeds the VkPhysicalDeviceLimits::maxPerStageResources limit (%" PRIu32 ").",
+                         string_VkShaderStageFlagBits(stage), total_resources, phys_dev_props.limits.maxPerStageResources);
     }
 
     return skip;

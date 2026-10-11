@@ -16,13 +16,14 @@
 
 #include <stdint.h>
 #include <vulkan/vulkan_core.h>
-#include "type_manager.h"
 #include "pass.h"
 
 struct VkDescriptorSetAndBindingMappingEXT;
 
 namespace gpuav {
 namespace spirv {
+
+struct AccessPath;
 
 class DescriptorHeapPass : public Pass {
   public:
@@ -43,7 +44,7 @@ class DescriptorHeapPass : public Pass {
     struct InstructionMeta {
         const Instruction* target_instruction = nullptr;
 
-        AccessPath access_path;
+        const AccessPath* access_path;
 
         // Internal encoded index to map into InstrumentationStatus::Device
         uint32_t mapping_index_resource = 0;
@@ -58,11 +59,11 @@ class DescriptorHeapPass : public Pass {
         UntypedLayout untyped_layout_sampler;
         uint32_t Hash(const uint32_t descriptor_index, VkDescriptorType vk_type) const;
 
-        bool instrument_seperate_sampler = false;
+        bool instrument_separate_sampler = false;
     };
 
     bool RequiresInstrumentation(const Function& function, const Instruction& inst, InstructionMeta& meta);
-    uint32_t CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta, bool is_seperate_sampler);
+    uint32_t CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta, bool is_separate_sampler);
     uint32_t CreateFunctionCallSampler(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta,
                                        uint32_t non_sampler_result);
     uint32_t CreateFunctionCallCombinedSampler(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta,
@@ -74,7 +75,7 @@ class DescriptorHeapPass : public Pass {
     uint32_t GetMapping(const AccessPath& access_path, bool is_sampler) const;
     uint32_t GetMinBufferAlignment(const InstructionMeta& meta) const;
 
-    UntypedLayout GetUntypedLayout(const Type& pointer_type, uint32_t heap_offset_member_index);
+    UntypedLayout GetUntypedLayout(const Type& pointer_type, uint32_t heap_offset_member_index, bool has_heap_offset_member_index);
 
     // < original ID, new CopyObject ID >
     vvl::unordered_map<uint32_t, uint32_t> copy_object_map_;

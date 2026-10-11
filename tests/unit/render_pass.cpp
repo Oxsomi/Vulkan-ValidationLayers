@@ -247,7 +247,7 @@ TEST_F(NegativeRenderPass, AttachmentDescriptionFinalLayoutZeroInitialized) {
                          "VUID-VkAttachmentDescription2-finalLayout-00843");
 }
 
-TEST_F(NegativeRenderPass, AttachmentDescriptionFinalLayoutSeperateDS) {
+TEST_F(NegativeRenderPass, AttachmentDescriptionFinalLayoutSeparateDS) {
     TEST_DESCRIPTION("VkAttachmentDescription's finalLayout must not be UNDEFINED or PREINITIALIZED");
 
     AddRequiredExtensions(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
@@ -2016,34 +2016,24 @@ void NegativeRenderPass::TestPotentialFormatFeatures(bool const useLinearColorAt
         RETURN_IF_SKIP(InitState());
     }
 
-    PFN_vkSetPhysicalDeviceFormatPropertiesEXT fpvkSetPhysicalDeviceFormatPropertiesEXT = nullptr;
-    PFN_vkGetOriginalPhysicalDeviceFormatPropertiesEXT fpvkGetOriginalPhysicalDeviceFormatPropertiesEXT = nullptr;
-    if (!LoadDeviceProfileLayer(fpvkSetPhysicalDeviceFormatPropertiesEXT, fpvkGetOriginalPhysicalDeviceFormatPropertiesEXT)) {
-        GTEST_SKIP() << "Failed to load device profile layer.";
+    const VkFormat valid_color_format = VK_FORMAT_R8G8B8A8_UNORM;  // guaranteed to be valid
+    const VkFormat invalid_color_format = VK_FORMAT_B8G8R8A8_UINT;
+    const VkFormat depth_format = VK_FORMAT_B8G8R8A8_UINT;
+    const VkFormatFeatureFlags2 attachment_features =
+        VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if ((m_device->FormatFeaturesOptimal(invalid_color_format) | m_device->FormatFeaturesLinear(invalid_color_format)) &
+        attachment_features) {
+        GTEST_SKIP() << "Cannot make " << string_VkFormat(invalid_color_format) << " lack attachment format features";
     }
 
-    // Set format features from being found
-    const VkFormat validColorFormat = VK_FORMAT_R8G8B8A8_UNORM;  // guaranteed to be valid everywhere
-    const VkFormat invalidColorFormat = VK_FORMAT_B8G8R8A8_UNORM;
-    const VkFormat depthFormat = VK_FORMAT_D16_UNORM;
-    VkFormatProperties formatProps;
-    fpvkGetOriginalPhysicalDeviceFormatPropertiesEXT(Gpu(), invalidColorFormat, &formatProps);
-    formatProps.linearTilingFeatures = 0;
-    formatProps.optimalTilingFeatures = 0;
-    fpvkSetPhysicalDeviceFormatPropertiesEXT(Gpu(), invalidColorFormat, formatProps);
-    fpvkGetOriginalPhysicalDeviceFormatPropertiesEXT(Gpu(), depthFormat, &formatProps);
-    formatProps.linearTilingFeatures = 0;
-    formatProps.optimalTilingFeatures = 0;
-    fpvkSetPhysicalDeviceFormatPropertiesEXT(Gpu(), depthFormat, formatProps);
-
     VkAttachmentDescription attachments[4] = {
-        {0, validColorFormat, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        {0, valid_color_format, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
          VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {0, invalidColorFormat, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        {0, invalid_color_format, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
          VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {0, validColorFormat, VK_SAMPLE_COUNT_4_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        {0, valid_color_format, VK_SAMPLE_COUNT_4_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
          VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL},
-        {0, depthFormat, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        {0, depth_format, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
          VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL}};
 
     VkAttachmentReference references[4] = {
@@ -2064,7 +2054,7 @@ void NegativeRenderPass::TestPotentialFormatFeatures(bool const useLinearColorAt
     subpass.pDepthStencilAttachment = nullptr;
     subpass.preserveAttachmentCount = 0;
     subpass.pPreserveAttachments = nullptr;
-    VkSubpassDescription originalSubpass = subpass;
+    VkSubpassDescription original_subpass = subpass;
 
     auto rpci = vku::InitStruct<VkRenderPassCreateInfo>(nullptr, 0u, 4u, attachments, 1u, &subpass, 0u, nullptr);
 
@@ -2077,7 +2067,7 @@ void NegativeRenderPass::TestPotentialFormatFeatures(bool const useLinearColorAt
         CreateRenderPassTest(rpci, rp2Supported, "VUID-VkSubpassDescription-pColorAttachments-02648",
                              "VUID-VkSubpassDescription2-pColorAttachments-02898");
     }
-    subpass = originalSubpass;
+    subpass = original_subpass;
 
     // Input attachment
     subpass.inputAttachmentCount = 1;
@@ -2089,13 +2079,13 @@ void NegativeRenderPass::TestPotentialFormatFeatures(bool const useLinearColorAt
         CreateRenderPassTest(rpci, rp2Supported, "VUID-VkSubpassDescription-pInputAttachments-02647",
                              "VUID-VkSubpassDescription2-pInputAttachments-02897");
     }
-    subpass = originalSubpass;
+    subpass = original_subpass;
 
     // Depth Stencil attachment
     subpass.pDepthStencilAttachment = &references[3];
     CreateRenderPassTest(rpci, rp2Supported, "VUID-VkSubpassDescription-pDepthStencilAttachment-02650",
                          "VUID-VkSubpassDescription2-pDepthStencilAttachment-02900");
-    subpass = originalSubpass;
+    subpass = original_subpass;
 
     // Resolve attachment
     subpass.pResolveAttachments = &references[1];
@@ -2997,6 +2987,7 @@ TEST_F(NegativeRenderPass, MultisampledRenderToSingleSampled3) {
 
     VkRenderingAttachmentInfo color_attachment = vku::InitStructHelper();
     color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
     ms_render_to_ss.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT;
     VkRenderingInfo begin_rendering_info = vku::InitStructHelper(&ms_render_to_ss);
@@ -3989,13 +3980,8 @@ TEST_F(NegativeRenderPass, IncompatibleFramebuffer) {
     RETURN_IF_SKIP(Init());
     InitRenderTarget();
 
-    VkSubpassDescription subpass = {};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-
-    VkRenderPassCreateInfo render_pass_ci = vku::InitStructHelper();
-    render_pass_ci.subpassCount = 1u;
-    render_pass_ci.pSubpasses = &subpass;
-    vkt::RenderPass render_pass(*m_device, render_pass_ci);
+    RenderPassSingleSubpass render_pass(*this);
+    render_pass.CreateRenderPass();
     vkt::Framebuffer framebuffer(*m_device, render_pass, 0, nullptr);
 
     VkCommandBufferInheritanceInfo inheritance_info = vku::InitStructHelper();
@@ -4219,8 +4205,7 @@ TEST_F(NegativeRenderPass, AttachmentLayout) {
     ImageMemoryBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
 
     m_command_buffer.Begin();
-    vk::CmdPipelineBarrier(m_command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0u,
-                           0u, nullptr, 0u, nullptr, 1u, &ImageMemoryBarrier);
+    m_command_buffer.Barrier(ImageMemoryBarrier, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     m_errorMonitor->SetDesiredError("VUID-vkCmdBeginRenderPass-initialLayout-00900");
     m_command_buffer.BeginRenderPass(rp, framebuffer, 32, 32, 1, &clear_value);
     m_errorMonitor->VerifyFound();
@@ -4240,32 +4225,13 @@ TEST_F(NegativeRenderPass, ImageSubresourceOverlapBetweenCurrentRenderPassAndDes
     const uint32_t height = 16;
     const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
 
-    VkAttachmentReference attach_ref = {};
-    attach_ref.attachment = 0;
-    attach_ref.layout = VK_IMAGE_LAYOUT_GENERAL;
-    VkSubpassDescription subpass = {};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &attach_ref;
-
-    VkAttachmentDescription attach_desc = {};
-    attach_desc.format = format;
-    attach_desc.samples = VK_SAMPLE_COUNT_1_BIT;
-    attach_desc.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attach_desc.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attach_desc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attach_desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attach_desc.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attach_desc.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
-    VkAttachmentDescription attach_desc2[] = {attach_desc, attach_desc};
-
-    VkRenderPassCreateInfo rpci = vku::InitStructHelper();
-    rpci.subpassCount = 1;
-    rpci.pSubpasses = &subpass;
-    rpci.attachmentCount = 2;
-    rpci.pAttachments = attach_desc2;
-
-    vkt::RenderPass render_pass(*m_device, rpci);
+    RenderPassSingleSubpass render_pass(*this);
+    render_pass.AddAttachmentDescription(format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                         VK_ATTACHMENT_STORE_OP_STORE);
+    render_pass.AddAttachmentDescription(format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                         VK_ATTACHMENT_STORE_OP_STORE);
+    render_pass.AddColorAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
+    render_pass.CreateRenderPass();
 
     VkClearValue clear_values[2] = {m_renderPassClearValues[0], m_renderPassClearValues[0]};
 
@@ -4543,12 +4509,6 @@ TEST_F(NegativeRenderPass, FramebufferDepthAttachmentInvalidUsage) {
     vkt::Image image(*m_device, 32u, 32u, depth_stencil_format, VK_IMAGE_USAGE_SAMPLED_BIT);
     vkt::ImageView image_view = image.CreateView(VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
 
-    VkAttachmentReference attach = {};
-    attach.layout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkSubpassDescription subpass = {};
-    subpass.pDepthStencilAttachment = &attach;
-
     VkAttachmentDescription attach_desc = {};
     attach_desc.format = depth_stencil_format;
     attach_desc.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -4556,13 +4516,10 @@ TEST_F(NegativeRenderPass, FramebufferDepthAttachmentInvalidUsage) {
     attach_desc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attach_desc.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkRenderPassCreateInfo rpci = vku::InitStructHelper();
-    rpci.attachmentCount = 1u;
-    rpci.pAttachments = &attach_desc;
-    rpci.subpassCount = 1u;
-    rpci.pSubpasses = &subpass;
-
-    vkt::RenderPass rp_ds(*m_device, rpci);
+    RenderPassSingleSubpass rp_ds(*this);
+    rp_ds.AddAttachmentDescription(attach_desc);
+    rp_ds.AddDepthStencilAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
+    rp_ds.CreateRenderPass();
 
     VkFramebufferCreateInfo fb_info = vku::InitStructHelper();
     fb_info.renderPass = rp_ds;
@@ -4606,20 +4563,10 @@ TEST_F(NegativeRenderPass, Framebuffer2DViewDsFormat) {
     attachment_description.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachment_description.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkAttachmentReference attachment_reference;
-    attachment_reference.attachment = 0u;
-    attachment_reference.layout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkSubpassDescription subpass = {};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.pDepthStencilAttachment = &attachment_reference;
-
-    VkRenderPassCreateInfo rp_ci = vku::InitStructHelper();
-    rp_ci.attachmentCount = 1u;
-    rp_ci.pAttachments = &attachment_description;
-    rp_ci.subpassCount = 1u;
-    rp_ci.pSubpasses = &subpass;
-    vkt::RenderPass render_pass(*m_device, rp_ci);
+    RenderPassSingleSubpass render_pass(*this);
+    render_pass.AddAttachmentDescription(attachment_description);
+    render_pass.AddDepthStencilAttachment(0u, VK_IMAGE_LAYOUT_GENERAL);
+    render_pass.CreateRenderPass();
 
     VkImageCreateInfo image_ci = vku::InitStructHelper();
     image_ci.flags = VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
@@ -4903,12 +4850,8 @@ TEST_F(NegativeRenderPass, FramebufferLimits) {
     SetTargetApiVersion(VK_API_VERSION_1_1);
     RETURN_IF_SKIP(Init());
 
-    VkSubpassDescription subpass = {};
-
-    VkRenderPassCreateInfo rp_ci = vku::InitStructHelper();
-    rp_ci.subpassCount = 1u;
-    rp_ci.pSubpasses = &subpass;
-    vkt::RenderPass render_pass(*m_device, rp_ci);
+    RenderPassSingleSubpass render_pass(*this);
+    render_pass.CreateRenderPass();
 
     VkFramebufferCreateInfo framebuffer_ci = vku::InitStructHelper();
     framebuffer_ci.renderPass = render_pass;
@@ -5103,4 +5046,30 @@ TEST_F(NegativeRenderPass, DynamicAndLegacy) {
     m_errorMonitor->SetDesiredError("VUID-VkGraphicsPipelineCreateInfo-pNext-12427");
     pipe.CreateGraphicsPipeline();
     m_errorMonitor->VerifyFound();
+}
+
+TEST_F(NegativeRenderPass, FramebufferAttachmentDestroyedAfterRecord) {
+    RETURN_IF_SKIP(Init());
+
+    RenderPassSingleSubpass rp(*this);
+    rp.AddAttachmentDescription(VK_FORMAT_R8G8B8A8_UNORM);
+    rp.AddColorAttachment(0, VK_IMAGE_LAYOUT_GENERAL);
+    rp.CreateRenderPass();
+
+    vkt::Image image(*m_device, 32, 32, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
+    vkt::ImageView view = image.CreateView();
+    vkt::Framebuffer fb(*m_device, rp, 1, &view.handle(), 32, 32);
+
+    m_command_buffer.Begin();
+    m_command_buffer.BeginRenderPass(rp, fb, 32, 32);
+    m_command_buffer.EndRenderPass();
+    m_command_buffer.End();
+
+    view.Destroy();
+
+    m_errorMonitor->SetDesiredError("VUID-vkQueueSubmit-pCommandBuffers-00070");
+    m_default_queue->Submit(m_command_buffer);
+    m_errorMonitor->VerifyFound();
+    m_device->Wait();
 }

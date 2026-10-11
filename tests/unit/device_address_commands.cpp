@@ -1381,12 +1381,9 @@ TEST_F(NegativeDeviceAddressCommands, DISABLED_VertexBufferBindingStride) {
 
     CreatePipelineHelper pipe(*this);
     pipe.AddDynamicState(VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE);
-    pipe.vi_ci_.vertexBindingDescriptionCount = 1;
     VkVertexInputBindingDescription input_binding = {0, sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
-    pipe.vi_ci_.pVertexBindingDescriptions = &input_binding;
-    pipe.vi_ci_.vertexAttributeDescriptionCount = 1;
     VkVertexInputAttributeDescription attribute = {0, 0, VK_FORMAT_R32_SFLOAT, 0};
-    pipe.vi_ci_.pVertexAttributeDescriptions = &attribute;
+    pipe.SetVertexInput(input_binding, attribute);
     pipe.shader_stages_ = {vs.GetStageCreateInfo(), pipe.fs_->GetStageCreateInfo()};
     pipe.CreateGraphicsPipeline();
 
@@ -2256,6 +2253,13 @@ TEST_F(NegativeDeviceAddressCommands, CopySampleCount) {
     image_ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     image_ci.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     image_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkImageFormatProperties image_format_properties;
+    GetImageFormatProps(Gpu(), image_ci, image_format_properties);
+    if ((image_format_properties.sampleCounts & VK_SAMPLE_COUNT_2_BIT) == 0) {
+        GTEST_SKIP() << "Required sample count not supported";
+    }
+
     vkt::Image image(*m_device, image_ci);
     image.SetLayout(VK_IMAGE_LAYOUT_GENERAL);
 
@@ -2885,28 +2889,31 @@ TEST_F(NegativeDeviceAddressCommands, CopyImageLayout) {
 TEST_F(NegativeDeviceAddressCommands, CopyAddressRangeOverlap) {
     RETURN_IF_SKIP(InitBasicDeviceAddressCommands());
 
-    vkt::Buffer buffer(*m_device, 32u * 32u * 4u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, vkt::device_address);
-    vkt::Image image(*m_device, 32u, 32u, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    vkt::Buffer buffer(*m_device, 32u * 32u * 4u, VK_BUFFER_USAGE_TRANSFER_DST_BIT, vkt::device_address);
+    vkt::Image image(*m_device, 32u, 32u, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+
+    VkDeviceAddressRangeEXT range_0 = {buffer.Address(), 64};
+    VkDeviceAddressRangeEXT range_1 = {buffer.Address() + 32, 64};
 
     VkDeviceMemoryImageCopyKHR regions[2];
     regions[0] = vku::InitStructHelper();
-    regions[0].addressRange = buffer.AddressRange();
+    regions[0].addressRange = range_0;
     regions[0].addressFlags = 0u;
     regions[0].addressRowLength = 0u;
     regions[0].addressImageHeight = 0u;
     regions[0].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
     regions[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     regions[0].imageOffset = {0, 0, 0};
-    regions[0].imageExtent = {32u, 4u, 1u};
+    regions[0].imageExtent = {2u, 2u, 1u};
     regions[1] = vku::InitStructHelper();
-    regions[1].addressRange = buffer.AddressRange();
+    regions[1].addressRange = range_1;
     regions[1].addressFlags = 0u;
     regions[1].addressRowLength = 0u;
     regions[1].addressImageHeight = 0u;
     regions[1].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
     regions[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    regions[1].imageOffset = {0, 4, 0};
-    regions[1].imageExtent = {32u, 4u, 1u};
+    regions[1].imageOffset = {4, 4, 0};
+    regions[1].imageExtent = {2u, 2u, 1u};
 
     VkCopyDeviceMemoryImageInfoKHR copy_memory_info = vku::InitStructHelper();
     copy_memory_info.image = image;
@@ -2914,8 +2921,38 @@ TEST_F(NegativeDeviceAddressCommands, CopyAddressRangeOverlap) {
     copy_memory_info.pRegions = regions;
 
     m_command_buffer.Begin();
-    m_errorMonitor->SetDesiredError("VUID-VkCopyDeviceMemoryImageInfoKHR-addressRange-13026");
-    vk::CmdCopyMemoryToImageKHR(m_command_buffer, &copy_memory_info);
+    m_errorMonitor->SetDesiredError("VUID-VkCopyDeviceMemoryImageInfoKHR-pRegions-12473");
+    vk::CmdCopyImageToMemoryKHR(m_command_buffer, &copy_memory_info);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeDeviceAddressCommands, CopyDeviceMemoryAddressOverlapRegion) {
+    RETURN_IF_SKIP(InitBasicDeviceAddressCommands());
+
+    vkt::Buffer buffer(*m_device, 4096u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, vkt::device_address);
+    const VkDeviceAddress base = buffer.Address();
+    constexpr VkDeviceSize r_size = 256u;
+
+    VkDeviceMemoryCopyKHR regions[2];
+    regions[0] = vku::InitStruct<VkDeviceMemoryCopyKHR>();
+    regions[0].srcRange = {base, r_size};
+    regions[0].srcFlags = 0u;
+    regions[0].dstRange = {base + 1024u, r_size};
+    regions[0].dstFlags = 0u;
+    regions[1] = vku::InitStruct<VkDeviceMemoryCopyKHR>();
+    regions[1].srcRange = {base + 1024u, r_size};
+    regions[1].srcFlags = 0u;
+    regions[1].dstRange = {base + 2048u, r_size};
+    regions[1].dstFlags = 0u;
+
+    VkCopyDeviceMemoryInfoKHR copy_memory_info = vku::InitStructHelper();
+    copy_memory_info.regionCount = 2;
+    copy_memory_info.pRegions = regions;
+
+    m_command_buffer.Begin();
+    m_errorMonitor->SetDesiredError("VUID-VkCopyDeviceMemoryInfoKHR-srcRange-13015");
+    vk::CmdCopyMemoryKHR(m_command_buffer, &copy_memory_info);
     m_errorMonitor->VerifyFound();
     m_command_buffer.End();
 }
@@ -4334,12 +4371,9 @@ TEST_F(NegativeDeviceAddressCommands, BindVertexBuffers3Stride) {
     VkShaderObj vs(*m_device, vs_source, VK_SHADER_STAGE_VERTEX_BIT);
 
     CreatePipelineHelper pipe(*this);
-    pipe.vi_ci_.vertexBindingDescriptionCount = 1;
     VkVertexInputBindingDescription input_binding = {0, sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
-    pipe.vi_ci_.pVertexBindingDescriptions = &input_binding;
-    pipe.vi_ci_.vertexAttributeDescriptionCount = 1;
     VkVertexInputAttributeDescription attribute = {0, 0, VK_FORMAT_R32_SFLOAT, 0};
-    pipe.vi_ci_.pVertexAttributeDescriptions = &attribute;
+    pipe.SetVertexInput(input_binding, attribute);
     pipe.shader_stages_ = {vs.GetStageCreateInfo(), pipe.fs_->GetStageCreateInfo()};
     pipe.CreateGraphicsPipeline();
 

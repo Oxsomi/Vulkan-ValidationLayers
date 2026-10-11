@@ -15,6 +15,7 @@
 
 #include "module.h"
 #include <cassert>
+#include <memory>
 #include <spirv/unified1/spirv.hpp>
 #include "containers/container_utils.h"
 #include "containers/custom_containers.h"
@@ -60,7 +61,7 @@ Module::Module(vvl::span<const uint32_t> words, DebugReport* debug_report, const
     // [OpSpecConstant Result ID -> OpDecorate SpecID value] mapping
     vvl::unordered_map<uint32_t, uint32_t> id_to_spec_id;
 
-    // Parse everything up until the first function and sort into seperate lists
+    // Parse everything up until the first function and sort into separate lists
     while (it != words.end()) {
         const uint32_t opcode = *it & 0x0ffffu;
         const uint32_t length = *it >> 16;
@@ -213,9 +214,7 @@ Module::Module(vvl::span<const uint32_t> words, DebugReport* debug_report, const
         it += length;
     }
 
-    // If multiple entrypoints, need to resolve which is the real push constant for it.
-    // Only meaningful when a push constant variable was actually found; modules without any push
-    // constants have nothing to disambiguate and used to warn spuriously here (inverted condition).
+    // If multiple entrypoints, need to resolve which is the real push constant for it
     if (type_manager_.FindPushConstantVariable() && entry_points_.size() > 1) {
         const uint32_t spirv_version_1_4 = 0x00010400;
         if (header_.version < spirv_version_1_4) {
@@ -496,6 +495,27 @@ const Variable& Module::GetBuiltInVariable(uint32_t built_in) {
     }
 
     return *built_in_variable;
+}
+
+const AccessPath* Module::GetAccessPath(const Function& function, const Instruction& inst) {
+    // Access path is only for memory accesses
+    if (!inst.IsMemoryAccess()) {
+        return nullptr;
+    }
+
+    auto it = access_path_cache_.find(&inst);
+    if (it != access_path_cache_.end()) {
+        return it->second.get();
+    }
+
+    auto path = std::make_unique<AccessPath>(*this, type_manager_, function, inst);
+    if (!path->is_valid) {
+        return nullptr;
+    }
+
+    const AccessPath* path_ptr = path.get();
+    access_path_cache_[&inst] = std::move(path);
+    return path_ptr;
 }
 
 // Found in extreme cases production shaders have maybe 5 entrypoints

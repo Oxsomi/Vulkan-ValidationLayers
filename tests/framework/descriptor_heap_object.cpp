@@ -17,10 +17,8 @@
  */
 
 #include "descriptor_heap_object.h"
-#include <vulkan/vulkan_core.h>
 
 #include "containers/container_utils.h"
-#include "../framework/layer_validation_tests.h"
 #include "../framework/ray_tracing_objects.h"
 #include "utils/math_utils.h"
 
@@ -40,13 +38,13 @@ static bool IsImage(VkDescriptorType type) {
                VK_DESCRIPTOR_TYPE_SAMPLE_WEIGHT_IMAGE_QCOM, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT});
 }
 
-void DescriptorHeap::AddDescriptorHeapRequirements(VkLayerTest& test) {
+void DescriptorHeapEXT::AddDescriptorHeapRequirements(VkLayerTest& test) {
     test.AddRequiredExtensions(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
     test.AddRequiredFeature(vkt::Feature::bufferDeviceAddress);
     test.AddRequiredFeature(vkt::Feature::descriptorHeap);
 }
 
-void DescriptorHeap::AddUntypedDescriptorHeapRequirements(VkLayerTest &test) {
+void DescriptorHeapEXT::AddUntypedDescriptorHeapRequirements(VkLayerTest &test) {
     test.AddRequiredExtensions(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
     test.AddRequiredExtensions(VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME);
     test.AddRequiredFeature(vkt::Feature::shaderUntypedPointers);
@@ -54,12 +52,12 @@ void DescriptorHeap::AddUntypedDescriptorHeapRequirements(VkLayerTest &test) {
     test.AddRequiredFeature(vkt::Feature::descriptorHeap);
 }
 
-DescriptorHeap::DescriptorHeap(VkLayerTest& test) : test_(&test) {
+DescriptorHeapEXT::DescriptorHeapEXT(VkLayerTest& test) : test_(&test) {
     heap_props.pNext = &tensor_heap_props;
     test_->GetPhysicalDeviceProperties2(heap_props);
 }
 
-void DescriptorHeap::CreateResourceHeap(VkDeviceSize app_size, bool reserved_range_in_front) {
+void DescriptorHeapEXT::CreateResourceHeap(VkDeviceSize app_size, bool reserved_range_in_front) {
     resource_reserved_range_in_front_ = reserved_range_in_front;
     const VkDeviceSize heap_size = AlignResource(app_size + heap_props.minResourceHeapReservedRange);
 
@@ -75,7 +73,7 @@ void DescriptorHeap::CreateResourceHeap(VkDeviceSize app_size, bool reserved_ran
     }
 }
 
-void DescriptorHeap::CreateSamplerHeap(VkDeviceSize app_size, bool reserved_range_in_front, bool use_embedded_samplers) {
+void DescriptorHeapEXT::CreateSamplerHeap(VkDeviceSize app_size, bool reserved_range_in_front, bool use_embedded_samplers) {
     embedded_samplers = use_embedded_samplers;
     sampler_reserved_range_in_front_ = reserved_range_in_front;
     const VkDeviceSize reserved_range =
@@ -94,12 +92,22 @@ void DescriptorHeap::CreateSamplerHeap(VkDeviceSize app_size, bool reserved_rang
     }
 }
 
-VkDeviceSize DescriptorHeap::WriteBufferDescriptor(const vkt::Buffer& buffer, VkDescriptorType desc_type) {
+VkDeviceSize DescriptorHeapEXT::GetResourceHeapSize() const {
+    assert(resource_heap_.handle() != VK_NULL_HANDLE);
+    return resource_heap_.CreateInfo().size;
+}
+
+VkDeviceAddressRangeKHR DescriptorHeapEXT::GetResourceHeapAddressRange() const {
+    assert(resource_heap_.handle() != VK_NULL_HANDLE);
+    return resource_heap_.AddressRange();
+}
+
+VkDeviceSize DescriptorHeapEXT::WriteBufferDescriptor(const vkt::Buffer& buffer, VkDescriptorType desc_type) {
     const VkDeviceAddressRangeKHR addr_range = buffer.AddressRange();
     return WriteBufferDescriptor(addr_range, desc_type);
 }
 
-VkDeviceSize DescriptorHeap::WriteBufferDescriptor(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type) {
+VkDeviceSize DescriptorHeapEXT::WriteBufferDescriptor(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type) {
     heap_offset_ = Align(heap_offset_, heap_props.bufferDescriptorAlignment);
     const VkDeviceSize write_offset = WriteBufferDescriptorAtOffset(addr_range, desc_type, heap_offset_);
 
@@ -109,14 +117,19 @@ VkDeviceSize DescriptorHeap::WriteBufferDescriptor(VkDeviceAddressRangeKHR addr_
     return write_offset;
 }
 
-VkDeviceSize DescriptorHeap::WriteBufferDescriptorAtOffset(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type,
+VkDeviceSize DescriptorHeapEXT::WriteBufferDescriptorAtOffset(const vkt::Buffer& buffer, VkDescriptorType desc_type,
+                                                           VkDeviceSize heap_offset) {
+    return WriteBufferDescriptorAtOffset(buffer.AddressRange(), desc_type, heap_offset);
+}
+
+VkDeviceSize DescriptorHeapEXT::WriteBufferDescriptorAtOffset(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type,
                                                            VkDeviceSize heap_offset) {
     assert(IsValueIn(desc_type, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                  VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER}));
     return WriteDescriptorAtOffset(addr_range, desc_type, heap_offset);
 }
 
-VkDeviceSize DescriptorHeap::WriteImageDescriptorAtOffset(const vkt::Image& image, VkDeviceSize heap_offset,
+VkDeviceSize DescriptorHeapEXT::WriteImageDescriptorAtOffset(const vkt::Image& image, VkDeviceSize heap_offset,
                                                           VkDescriptorType desc_type, VkImageLayout layout) {
     VkImageViewCreateInfo view_info = image.BasicViewCreatInfo();
     VkImageDescriptorInfoEXT image_info = vku::InitStructHelper();
@@ -125,7 +138,7 @@ VkDeviceSize DescriptorHeap::WriteImageDescriptorAtOffset(const vkt::Image& imag
     return WriteDescriptorAtOffset(&image_info, desc_type, heap_offset);
 }
 
-VkDeviceSize DescriptorHeap::WriteImageDescriptor(const vkt::Image& image, VkDescriptorType desc_type, VkImageLayout layout) {
+VkDeviceSize DescriptorHeapEXT::WriteImageDescriptor(const vkt::Image& image, VkDescriptorType desc_type, VkImageLayout layout) {
     heap_offset_ = Align(heap_offset_, heap_props.imageDescriptorAlignment);
 
     VkImageViewCreateInfo view_info = image.BasicViewCreatInfo();
@@ -141,12 +154,12 @@ VkDeviceSize DescriptorHeap::WriteImageDescriptor(const vkt::Image& image, VkDes
     return write_offset;
 }
 
-VkDeviceSize DescriptorHeap::WriteAccelerationStructureDescriptor(vkt::as::AccelerationStructureKHR& as) {
+VkDeviceSize DescriptorHeapEXT::WriteAccelerationStructureDescriptor(vkt::as::AccelerationStructureKHR& as) {
     const VkDeviceAddress as_addr = as.GetAccelerationStructureDeviceAddress();
     return WriteAccelerationStructureDescriptor(as_addr);
 }
 
-VkDeviceSize DescriptorHeap::WriteAccelerationStructureDescriptor(VkDeviceAddress as_addr) {
+VkDeviceSize DescriptorHeapEXT::WriteAccelerationStructureDescriptor(VkDeviceAddress as_addr) {
     constexpr VkDescriptorType as_desc_type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     heap_offset_ = Align(heap_offset_, heap_props.bufferDescriptorAlignment);
     // Per the spec, size can be 0
@@ -159,10 +172,10 @@ VkDeviceSize DescriptorHeap::WriteAccelerationStructureDescriptor(VkDeviceAddres
     return write_offset;
 }
 
-VkDeviceSize DescriptorHeap::WriteSamplerDescriptor(VkSamplerCreateInfo* sampler_create_info) {
+VkDeviceSize DescriptorHeapEXT::WriteSamplerDescriptor(VkSamplerCreateInfo* sampler_create_info) {
     VkSamplerCreateInfo safe_create_info = SafeSaneSamplerCreateInfo();
 
-    sampler_heap_offset_ = Align(sampler_heap_offset_, heap_props.samplerHeapAlignment);
+    sampler_heap_offset_ = Align(sampler_heap_offset_, heap_props.samplerDescriptorAlignment);
     const VkDeviceSize write_offset = sampler_heap_offset_;
 
     VkHostAddressRangeEXT sampler_host_data{};
@@ -177,7 +190,20 @@ VkDeviceSize DescriptorHeap::WriteSamplerDescriptor(VkSamplerCreateInfo* sampler
     return write_offset;
 }
 
-VkDeviceSize DescriptorHeap::WriteNullDescriptorAtOffset(VkDescriptorType desc_type, VkDeviceSize heap_offset) {
+VkDeviceSize DescriptorHeapEXT::WriteSamplerDescriptorAtOffset(VkSamplerCreateInfo* sampler_create_info, VkDeviceSize heap_offset) {
+    VkSamplerCreateInfo safe_create_info = SafeSaneSamplerCreateInfo();
+
+    VkHostAddressRangeEXT sampler_host_data{};
+    sampler_host_data.address = sampler_heap_data_ + heap_offset;
+    sampler_host_data.size = static_cast<size_t>(heap_props.samplerDescriptorSize);
+
+    vk::WriteSamplerDescriptorsEXT(*test_->DeviceObj(), 1u, sampler_create_info ? sampler_create_info : &safe_create_info,
+                                   &sampler_host_data);
+
+    return heap_offset;
+}
+
+VkDeviceSize DescriptorHeapEXT::WriteNullDescriptorAtOffset(VkDescriptorType desc_type, VkDeviceSize heap_offset) {
     assert(resource_heap_.handle() != VK_NULL_HANDLE);
     VkResourceDescriptorInfoEXT desc_info = vku::InitStructHelper();
     desc_info.type = desc_type;
@@ -200,15 +226,15 @@ VkDeviceSize DescriptorHeap::WriteNullDescriptorAtOffset(VkDescriptorType desc_t
     return heap_offset;
 }
 
-VkDeviceSize DescriptorHeap::AlignResource(VkDeviceSize offset) {
+VkDeviceSize DescriptorHeapEXT::AlignResource(VkDeviceSize offset) {
     VkDeviceSize aligned_offset = Align(offset, heap_props.bufferDescriptorAlignment);
     aligned_offset = Align(aligned_offset, heap_props.imageDescriptorAlignment);
     return aligned_offset;
 }
 
-VkDeviceSize DescriptorHeap::AlignSampler(VkDeviceSize offset) { return Align(offset, heap_props.samplerDescriptorAlignment); }
+VkDeviceSize DescriptorHeapEXT::AlignSampler(VkDeviceSize offset) { return Align(offset, heap_props.samplerDescriptorAlignment); }
 
-VkDeviceSize DescriptorHeap::GetResourceHeapReservedRangeOffset() const {
+VkDeviceSize DescriptorHeapEXT::GetResourceHeapReservedRangeOffset() const {
     if (resource_reserved_range_in_front_) {
         return 0;
     } else {
@@ -216,7 +242,7 @@ VkDeviceSize DescriptorHeap::GetResourceHeapReservedRangeOffset() const {
     }
 }
 
-VkDeviceSize DescriptorHeap::GetSamplerHeapReservedRangeOffset() const {
+VkDeviceSize DescriptorHeapEXT::GetSamplerHeapReservedRangeOffset() const {
     const VkDeviceSize min_reserved_range =
         embedded_samplers ? heap_props.minSamplerHeapReservedRangeWithEmbedded : heap_props.minSamplerHeapReservedRange;
     if (resource_reserved_range_in_front_) {
@@ -226,7 +252,7 @@ VkDeviceSize DescriptorHeap::GetSamplerHeapReservedRangeOffset() const {
     }
 }
 
-void DescriptorHeap::BindResourceHeap(vkt::CommandBuffer& cmd_buffer) {
+void DescriptorHeapEXT::BindResourceHeap(vkt::CommandBuffer& cmd_buffer) {
     VkBindHeapInfoEXT bind_resource_info = vku::InitStructHelper();
     bind_resource_info.heapRange = resource_heap_.AddressRange();
     bind_resource_info.reservedRangeOffset = GetResourceHeapReservedRangeOffset();
@@ -234,7 +260,7 @@ void DescriptorHeap::BindResourceHeap(vkt::CommandBuffer& cmd_buffer) {
     vk::CmdBindResourceHeapEXT(cmd_buffer, &bind_resource_info);
 }
 
-void DescriptorHeap::BindSamplerHeap(vkt::CommandBuffer &cmd_buffer) {
+void DescriptorHeapEXT::BindSamplerHeap(vkt::CommandBuffer &cmd_buffer) {
     const VkDeviceSize min_reserved_range =
         embedded_samplers ? heap_props.minSamplerHeapReservedRangeWithEmbedded : heap_props.minSamplerHeapReservedRange;
     VkBindHeapInfoEXT bind_resource_info = vku::InitStructHelper();
@@ -245,7 +271,7 @@ void DescriptorHeap::BindSamplerHeap(vkt::CommandBuffer &cmd_buffer) {
 }
 
 // Buffer variation
-VkDeviceSize DescriptorHeap::WriteDescriptorAtOffset(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type,
+VkDeviceSize DescriptorHeapEXT::WriteDescriptorAtOffset(VkDeviceAddressRangeKHR addr_range, VkDescriptorType desc_type,
                                                      VkDeviceSize heap_offset) {
     assert(resource_heap_.handle() != VK_NULL_HANDLE);
     VkResourceDescriptorInfoEXT desc_info = vku::InitStructHelper();
@@ -264,7 +290,7 @@ VkDeviceSize DescriptorHeap::WriteDescriptorAtOffset(VkDeviceAddressRangeKHR add
 }
 
 // Image variation
-VkDeviceSize DescriptorHeap::WriteDescriptorAtOffset(const VkImageDescriptorInfoEXT* image_info, VkDescriptorType desc_type,
+VkDeviceSize DescriptorHeapEXT::WriteDescriptorAtOffset(const VkImageDescriptorInfoEXT* image_info, VkDescriptorType desc_type,
                                                      VkDeviceSize heap_offset) {
     assert(resource_heap_.handle() != VK_NULL_HANDLE);
     VkResourceDescriptorInfoEXT desc_info = vku::InitStructHelper();

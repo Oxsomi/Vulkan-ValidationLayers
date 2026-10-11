@@ -396,7 +396,11 @@ class Instance : public vvl::BaseInstance {
                                                    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface,
                                                    const Context &context) const;
 #endif  // VK_USE_PLATFORM_WAYLAND_KHR
-
+#ifdef VK_USE_PLATFORM_DIRECTFB_EXT
+    bool manual_PreCallValidateCreateDirectFBSurfaceEXT(VkInstance instance, const VkDirectFBSurfaceCreateInfoEXT* pCreateInfo,
+                                                        const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface,
+                                                        const Context& context) const;
+#endif  // VK_USE_PLATFORM_DIRECTFB_EXT
 #ifdef VK_USE_PLATFORM_XLIB_KHR
     bool manual_PreCallValidateCreateXlibSurfaceKHR(VkInstance instance, const VkXlibSurfaceCreateInfoKHR *pCreateInfo,
                                                     const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface,
@@ -431,6 +435,10 @@ class Instance : public vvl::BaseInstance {
                                                                    const Context &context) const;
     bool manual_PreCallValidateGetPhysicalDeviceDescriptorSizeEXT(VkPhysicalDevice physicalDevice, VkDescriptorType descriptorType,
                                                                   const Context& context) const;
+
+    bool manual_PreCallValidateGetPhysicalDeviceCooperativeMatrixProperties2EXT(
+        VkPhysicalDevice physicalDevice, const VkPhysicalDeviceCooperativeMatrixInfo2EXT *pCooperativeMatrixInfo,
+        uint32_t *pPropertyCount, VkCooperativeMatrixProperties2EXT *pProperties, const Context &context) const;
 
     bool ValidateGetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice, VkFormat format,
                                                     VkFormatProperties2 *pFormatProperties, const Context &context) const;
@@ -507,13 +515,6 @@ class Device : public vvl::BaseDevice {
 
     bool ValidateCoarseSampleOrderCustomNV(const VkCoarseSampleOrderCustomNV &order, const Location &order_loc) const;
 
-    bool ValidateGeometryTrianglesNV(const VkGeometryTrianglesNV &triangles, VkAccelerationStructureNV object_handle,
-                                     const Location &loc) const;
-    bool ValidateGeometryAABBNV(const VkGeometryAABBNV &geometry, VkAccelerationStructureNV object_handle,
-                                const Location &loc) const;
-    bool ValidateGeometryNV(const VkGeometryNV &geometry, VkAccelerationStructureNV object_handle, const Location &loc) const;
-    bool ValidateAccelerationStructureInfoNV(const Context &context, const VkAccelerationStructureInfoNV &info,
-                                             VkAccelerationStructureNV object_handle, const Location &loc) const;
     bool ValidateSwapchainCreateInfoMaintenance1(const VkSwapchainCreateInfoKHR &create_info, const Location &loc) const;
     bool ValidateSwapchainCreateInfo(const Context &context, const VkSwapchainCreateInfoKHR &create_info,
                                      const Location &loc) const;
@@ -569,6 +570,8 @@ class Device : public vvl::BaseDevice {
                                                const VkImageResolve *pRegions, const Context &context) const;
     bool manual_PreCallValidateCmdResolveImage2(VkCommandBuffer commandBuffer, const VkResolveImageInfo2 *pResolveImageInfo,
                                                 const Context &context) const;
+    bool manual_PreCallValidateCmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2 *pBlitImageInfo,
+                                             const Context &context) const;
 
     bool manual_PreCallValidateCreateTensorARM(VkDevice device, const VkTensorCreateInfoARM *pCreateInfo,
                                                const VkAllocationCallbacks *pAllocator, VkTensorARM *pTensor,
@@ -586,6 +589,8 @@ class Device : public vvl::BaseDevice {
     bool ValidatePushConstantRange(uint32_t push_constant_range_count, const VkPushConstantRange *push_constant_ranges,
                                    const Location &loc) const;
 
+    bool ValidateDescriptorSetAndBindingMappingEXT(const VkDescriptorSetAndBindingMappingEXT& mapping,
+                                                   const Location& map_loc) const;
     bool ValidateShaderDescriptorSetAndBindingMappingInfo(const VkShaderDescriptorSetAndBindingMappingInfoEXT& create_info,
                                                           const Location& loc) const;
     bool ValidatePipelineShaderStageCreateInfoCommon(const Context &context, const VkPipelineShaderStageCreateInfo &create_info,
@@ -653,6 +658,10 @@ class Device : public vvl::BaseDevice {
     bool ValidateCreateBufferFlags(const VkBufferCreateFlags flags, const Location &flag_loc) const;
     bool ValidateCreateBufferBufferDeviceAddress(const VkBufferCreateInfo &create_info, const Location &create_info_loc) const;
     bool ValidateCreateBufferTileMemory(const VkBufferCreateInfo &create_info, const Location &create_info_loc) const;
+    bool ValidateCreateBufferDeviceAddressAllocationAlignment(const VkBufferCreateInfo& create_info,
+                                                              const Location& create_info_loc) const;
+    bool ValidateBufferDeviceAddressAlignmentAllocateInfo(const VkBufferDeviceAddressAlignmentAllocateInfoVALVE& alignment_info,
+                                                          const Location& alignment_loc) const;
 
     bool ValidateDependencyInfo(const Context &context, const VkDependencyInfo &dep_info, const Location &loc) const;
     bool manual_PreCallValidateCmdPipelineBarrier2(VkCommandBuffer commandBuffer, const VkDependencyInfo *pDependencyInfo,
@@ -787,11 +796,6 @@ class Device : public vvl::BaseDevice {
                                               const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory,
                                               const Context &context) const;
 
-    bool manual_PreCallValidateCreateAccelerationStructureNV(VkDevice device,
-                                                             const VkAccelerationStructureCreateInfoNV *pCreateInfo,
-                                                             const VkAllocationCallbacks *pAllocator,
-                                                             VkAccelerationStructureNV *pAccelerationStructure,
-                                                             const Context &context) const;
     bool ValidateCreateAccelerationStructure(const VkAccelerationStructureCreateFlagsKHR create_flags,
                                              const void* create_info_pNext, const Location& create_info_loc) const;
     bool manual_PreCallValidateCreateAccelerationStructureKHR(VkDevice device,
@@ -805,28 +809,9 @@ class Device : public vvl::BaseDevice {
                                                                VkAccelerationStructureKHR* pAccelerationStructure,
                                                                const Context& context) const;
     bool manual_PreCallValidateDestroyAccelerationStructureKHR(VkDevice device, VkAccelerationStructureKHR accelerationStructure,
-                                                               const VkAllocationCallbacks *pAllocator,
-                                                               const Context &context) const;
-    bool manual_PreCallValidateCmdBuildAccelerationStructureNV(VkCommandBuffer commandBuffer,
-                                                               const VkAccelerationStructureInfoNV *pInfo, VkBuffer instanceData,
-                                                               VkDeviceSize instanceOffset, VkBool32 update,
-                                                               VkAccelerationStructureNV dst, VkAccelerationStructureNV src,
-                                                               VkBuffer scratch, VkDeviceSize scratchOffset,
-                                                               const Context &context) const;
-    bool manual_PreCallValidateGetAccelerationStructureHandleNV(VkDevice device, VkAccelerationStructureNV accelerationStructure,
-                                                                size_t dataSize, void *pData, const Context &context) const;
-
-    bool manual_PreCallValidateCmdWriteAccelerationStructuresPropertiesNV(VkCommandBuffer commandBuffer,
-                                                                          uint32_t accelerationStructureCount,
-                                                                          const VkAccelerationStructureNV *pAccelerationStructures,
-                                                                          VkQueryType queryType, VkQueryPool queryPool,
-                                                                          uint32_t firstQuery, const Context &context) const;
-    bool ValidateCreateRayTracingPipelinesFlagsNV(const VkPipelineCreateFlags2 flags, const Location &flags_loc) const;
-    bool ValidateCreateRayTracingPipelinesFlagsKHR(const VkPipelineCreateFlags2 flags, const Location &flags_loc) const;
-    bool manual_PreCallValidateCreateRayTracingPipelinesNV(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
-                                                           const VkRayTracingPipelineCreateInfoNV *pCreateInfos,
-                                                           const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines,
-                                                           const Context &context) const;
+                                                               const VkAllocationCallbacks* pAllocator,
+                                                               const Context& context) const;
+    bool ValidateCreateRayTracingPipelinesFlagsKHR(const VkPipelineCreateFlags2 flags, const Location& flags_loc) const;
     bool manual_PreCallValidateCreateRayTracingPipelinesKHR(VkDevice device, VkDeferredOperationKHR deferredOperation,
                                                             VkPipelineCache pipelineCache, uint32_t createInfoCount,
                                                             const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
@@ -1201,9 +1186,28 @@ class Device : public vvl::BaseDevice {
     bool manual_PreCallValidateCmdSetDiscardRectangleEXT(VkCommandBuffer commandBuffer, uint32_t firstDiscardRectangle,
                                                          uint32_t discardRectangleCount, const VkRect2D *pDiscardRectangles,
                                                          const Context &context) const;
+    bool manual_PreCallValidateCmdSetColorBlendEnableEXT(VkCommandBuffer commandBuffer, uint32_t firstAttachment,
+                                                         uint32_t attachmentCount, const VkBool32* pColorBlendEnables,
+                                                         const Context& context) const;
+    bool manual_PreCallValidateCmdSetColorBlendEquationEXT(VkCommandBuffer commandBuffer, uint32_t firstAttachment,
+                                                           uint32_t attachmentCount,
+                                                           const VkColorBlendEquationEXT* pColorBlendEquations,
+                                                           const Context& context) const;
+    bool manual_PreCallValidateCmdSetColorWriteMaskEXT(VkCommandBuffer commandBuffer, uint32_t firstAttachment,
+                                                       uint32_t attachmentCount, const VkColorComponentFlags* pColorWriteMasks,
+                                                       const Context& context) const;
+    bool manual_PreCallValidateCmdSetColorBlendAdvancedEXT(VkCommandBuffer commandBuffer, uint32_t firstAttachment,
+                                                           uint32_t attachmentCount,
+                                                           const VkColorBlendAdvancedEXT* pColorBlendAdvanced,
+                                                           const Context& context) const;
     bool manual_PreCallValidateGetQueryPoolResults(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount,
                                                    size_t dataSize, void *pData, VkDeviceSize stride, VkQueryResultFlags flags,
                                                    const Context &context) const;
+    bool manual_PreCallValidateResetQueryPool(VkDevice device, VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount,
+                                              const Context& context) const;
+    bool manual_PreCallValidateCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t firstQuery,
+                                                       uint32_t queryCount, VkBuffer dstBuffer, VkDeviceSize dstOffset,
+                                                       VkDeviceSize stride, VkQueryResultFlags flags, const Context& context) const;
     bool manual_PreCallValidateCmdCopyQueryPoolResultsToMemoryKHR(VkCommandBuffer commandBuffer, VkQueryPool queryPool,
                                                                   uint32_t firstQuery, uint32_t queryCount,
                                                                   const VkStridedDeviceAddressRangeKHR* pDstRange,
@@ -1362,12 +1366,6 @@ class Device : public vvl::BaseDevice {
         VkCommandBuffer commandBuffer, const VkBuildPartitionedAccelerationStructureInfoNV *pBuildInfo,
         const Context &context) const;
 
-#ifdef VK_USE_PLATFORM_DIRECTFB_EXT
-    bool manual_PreCallValidateCreateDirectFBSurfaceEXT(VkInstance instance, const VkDirectFBSurfaceCreateInfoEXT* pCreateInfo,
-                                                        const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface,
-                                                        const Context& context) const;
-#endif  // VK_USE_PLATFORM_DIRECTFB_EXT
-
     bool manual_PreCallValidateGetCalibratedTimestampsKHR(VkDevice device, uint32_t timestampCount,
                                                           const VkCalibratedTimestampInfoKHR *pTimestampInfos,
                                                           uint64_t *pTimestamps, uint64_t *pMaxDeviation,
@@ -1376,6 +1374,9 @@ class Device : public vvl::BaseDevice {
                                                           const VkCalibratedTimestampInfoKHR *pTimestampInfos,
                                                           uint64_t *pTimestamps, uint64_t *pMaxDeviation,
                                                           const Context &context) const;
+    bool manual_PreCallValidateCreatePrivateDataSlot(VkDevice device, const VkPrivateDataSlotCreateInfo* pCreateInfo,
+                                                     const VkAllocationCallbacks* pAllocator, VkPrivateDataSlot* pPrivateDataSlot,
+                                                     const Context& context) const;
     bool manual_PreCallValidateGetDynamicRenderingTilePropertiesQCOM(VkDevice device, const VkRenderingInfo* pRenderingInfo,
                                                                      VkTilePropertiesQCOM* pProperties,
                                                                      const Context &context) const;
@@ -1387,6 +1388,10 @@ class Device : public vvl::BaseDevice {
                                                    const Context& context) const;
     bool manual_PreCallValidateQueueSetPerfHintQCOM(VkQueue queue, const VkPerfHintInfoQCOM *pPerfHintInfo,
                                                     const Context &context) const;
+
+    bool manual_PreCallValidateCmdSetDispatchParametersARM(VkCommandBuffer commandBuffer,
+                                                           const VkDispatchParametersARM* pDispatchParameters,
+                                                           const Context& context) const;
 
 #include "generated/stateless_device_methods.h"
 };

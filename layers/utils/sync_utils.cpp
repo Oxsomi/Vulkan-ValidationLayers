@@ -53,7 +53,7 @@ bool QFOBufferTransferBarrier::operator==(const QFOBufferTransferBarrier& rhs) c
 
 namespace sync_utils {
 // IMPORTANT: the features listed here should also be reflected in GetFeatureNameMap()
-VkPipelineStageFlags2 DisabledPipelineStages(const DeviceFeatures& features, const DeviceExtensions& device_extensions) {
+VkPipelineStageFlags2 DisabledPipelineStages(const DeviceFeatures& features) {
     VkPipelineStageFlags2 result = 0;
     if (!features.geometryShader) {
         result |= VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
@@ -85,11 +85,10 @@ VkPipelineStageFlags2 DisabledPipelineStages(const DeviceFeatures& features, con
     if (!features.invocationMask) {
         result |= VK_PIPELINE_STAGE_2_INVOCATION_MASK_BIT_HUAWEI;
     }
-    if (!IsExtEnabled(device_extensions.vk_nv_ray_tracing) && !features.rayTracingPipeline) {
+    if (!features.rayTracingPipeline) {
         result |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
     }
-    // The NV extension includes the accelerationStructure implicitly
-    if (!IsExtEnabled(device_extensions.vk_nv_ray_tracing) && !features.accelerationStructure) {
+    if (!features.accelerationStructure) {
         result |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
     }
     if (!features.rayTracingMaintenance1) {
@@ -232,6 +231,12 @@ ExecScopes GetExecScopes(const VkDependencyInfo& dep_info) {
     for (uint32_t i = 0; i < dep_info.imageMemoryBarrierCount; i++) {
         result.src |= dep_info.pImageMemoryBarriers[i].srcStageMask;
         result.dst |= dep_info.pImageMemoryBarriers[i].dstStageMask;
+    }
+    if (const auto memory_range_info = vku::FindStructInPNextChain<VkMemoryRangeBarriersInfoKHR>(dep_info.pNext)) {
+        for (uint32_t i = 0; i < memory_range_info->memoryRangeBarrierCount; i++) {
+            result.src |= memory_range_info->pMemoryRangeBarriers[i].srcStageMask;
+            result.dst |= memory_range_info->pMemoryRangeBarriers[i].dstStageMask;
+        }
     }
     return result;
 }

@@ -1171,13 +1171,13 @@ TEST_F(NegativeShaderInterface, VsFsTypeMismatchShaderObject) {
         }
     )glsl";
 
-    const vkt::Shader vertShader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, GLSLToSPV(VK_SHADER_STAGE_VERTEX_BIT, vsSource));
-    const vkt::Shader fragShader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, GLSLToSPV(VK_SHADER_STAGE_FRAGMENT_BIT, fsSource));
+    const vkt::ShaderEXT vertShader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, vsSource);
+    const vkt::ShaderEXT fragShader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, fsSource);
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
-    m_command_buffer.BindShaders(vertShader, fragShader);
+    SetDefaultDynamicStatesExcludeEXT();
+    m_command_buffer.BindShadersEXT(vertShader, fragShader);
     m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-OpEntryPoint-07754");
     vk::CmdDraw(m_command_buffer, 4, 1, 0, 0);
     m_errorMonitor->VerifyFound();
@@ -1210,13 +1210,13 @@ TEST_F(NegativeShaderInterface, VsFsTypeMismatchVectorSizeShaderObject) {
         }
     )glsl";
 
-    const vkt::Shader vertShader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, GLSLToSPV(VK_SHADER_STAGE_VERTEX_BIT, vsSource));
-    const vkt::Shader fragShader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, GLSLToSPV(VK_SHADER_STAGE_FRAGMENT_BIT, fsSource));
+    const vkt::ShaderEXT vertShader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, vsSource);
+    const vkt::ShaderEXT fragShader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, fsSource);
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
-    m_command_buffer.BindShaders(vertShader, fragShader);
+    SetDefaultDynamicStatesExcludeEXT();
+    m_command_buffer.BindShadersEXT(vertShader, fragShader);
     m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-maintenance4-06817");
     vk::CmdDraw(m_command_buffer, 4, 1, 0, 0);
     m_errorMonitor->VerifyFound();
@@ -1737,12 +1737,8 @@ TEST_F(NegativeShaderInterface, FragmentOutputNotWrittenDynamicRendering) {
     )glsl";
     VkShaderObj fs(*m_device, fs_source, VK_SHADER_STAGE_FRAGMENT_BIT);
 
-    VkFormat color_formats = VK_FORMAT_B8G8R8A8_UNORM;
-    VkPipelineRenderingCreateInfo pipeline_rendering_info = vku::InitStructHelper();
-    pipeline_rendering_info.colorAttachmentCount = 1;
-    pipeline_rendering_info.pColorAttachmentFormats = &color_formats;
-
-    CreatePipelineHelper pipe(*this, &pipeline_rendering_info);
+    CreatePipelineHelper pipe(*this);
+    pipe.SetDynamicRendering({VK_FORMAT_B8G8R8A8_UNORM});
     pipe.shader_stages_ = {pipe.vs_->GetStageCreateInfo(), fs.GetStageCreateInfo()};
     pipe.cb_attachments_.colorWriteMask = 0xf;  // all components
     pipe.CreateGraphicsPipeline();
@@ -1771,13 +1767,13 @@ TEST_F(NegativeShaderInterface, FragmentOutputNotWrittenDynamicRenderingShaderOb
         void main() {}
     )glsl";
 
-    const vkt::Shader vert_shader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, GLSLToSPV(VK_SHADER_STAGE_VERTEX_BIT, kVertexMinimalGlsl));
-    const vkt::Shader frag_shader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, GLSLToSPV(VK_SHADER_STAGE_FRAGMENT_BIT, fs_source));
+    const vkt::ShaderEXT vert_shader(*m_device, VK_SHADER_STAGE_VERTEX_BIT, kVertexMinimalGlsl);
+    const vkt::ShaderEXT frag_shader(*m_device, VK_SHADER_STAGE_FRAGMENT_BIT, fs_source);
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderingColor(GetDynamicRenderTarget(), GetRenderTargetArea());
-    SetDefaultDynamicStatesExclude();
-    m_command_buffer.BindShaders(vert_shader, frag_shader);
+    SetDefaultDynamicStatesExcludeEXT();
+    m_command_buffer.BindShadersEXT(vert_shader, frag_shader);
     VkColorComponentFlags color_write_mask = 0xf;  // all
     vk::CmdSetColorWriteMaskEXT(m_command_buffer, 0, 1, &color_write_mask);
     m_errorMonitor->SetDesiredWarning("Undefined-Value-OutputNotWritten-DynamicRendering");
@@ -1923,12 +1919,8 @@ TEST_F(NegativeShaderInterface, FragmentOutputTypeMismatchDynamicRendering) {
 
     VkShaderObj fs(*m_device, fs_source, VK_SHADER_STAGE_FRAGMENT_BIT);
 
-    VkFormat color_formats = VK_FORMAT_B8G8R8A8_UNORM;
-    VkPipelineRenderingCreateInfo pipeline_rendering_info = vku::InitStructHelper();
-    pipeline_rendering_info.colorAttachmentCount = 1;
-    pipeline_rendering_info.pColorAttachmentFormats = &color_formats;
-
-    CreatePipelineHelper pipe(*this, &pipeline_rendering_info);
+    CreatePipelineHelper pipe(*this);
+    pipe.SetDynamicRendering({VK_FORMAT_B8G8R8A8_UNORM});
     pipe.shader_stages_ = {pipe.vs_->GetStageCreateInfo(), fs.GetStageCreateInfo()};
     pipe.cb_attachments_.colorWriteMask = 0xf;  // all components
     pipe.CreateGraphicsPipeline();
@@ -2097,12 +2089,8 @@ TEST_F(NegativeShaderInterface, FragmentOutputNotConsumedDynamicRendering) {
     )glsl";
     VkShaderObj fs(*m_device, fs_source, VK_SHADER_STAGE_FRAGMENT_BIT);
 
-    VkFormat color_formats = VK_FORMAT_B8G8R8A8_UNORM;
-    VkPipelineRenderingCreateInfo pipeline_rendering_info = vku::InitStructHelper();
-    pipeline_rendering_info.colorAttachmentCount = 1;
-    pipeline_rendering_info.pColorAttachmentFormats = &color_formats;
-
-    CreatePipelineHelper pipe(*this, &pipeline_rendering_info);
+    CreatePipelineHelper pipe(*this);
+    pipe.SetDynamicRendering({VK_FORMAT_B8G8R8A8_UNORM});
     pipe.shader_stages_ = {pipe.vs_->GetStageCreateInfo(), fs.GetStageCreateInfo()};
     pipe.cb_attachments_.colorWriteMask = 0xf;  // all components
     pipe.CreateGraphicsPipeline();
@@ -2560,8 +2548,8 @@ TEST_F(NegativeShaderInterface, MissingInputAttachmentIndexShaderObject) {
                                        });
 
     m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-None-09558");
-    const vkt::Shader frag_shader(*m_device,
-                                  ShaderCreateInfo(spv, VK_SHADER_STAGE_FRAGMENT_BIT, 1, &descriptor_set.layout_.handle()));
+    const vkt::ShaderEXT frag_shader(*m_device,
+                                     ShaderCreateInfoEXT(spv, VK_SHADER_STAGE_FRAGMENT_BIT, 1, &descriptor_set.layout_.handle()));
     m_errorMonitor->VerifyFound();
 }
 

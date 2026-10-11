@@ -59,8 +59,8 @@ TEST_F(PositiveSecondaryCommandBuffer, Barrier) {
     VkMemoryBarrier mem_barrier = vku::InitStructHelper();
     mem_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     mem_barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    vk::CmdPipelineBarrier(secondary, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                           VK_DEPENDENCY_BY_REGION_BIT, 1, &mem_barrier, 0, nullptr, 0, nullptr);
+    secondary.Barrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, mem_barrier,
+                      VK_DEPENDENCY_BY_REGION_BIT);
 
     VkImageMemoryBarrier barrier = vku::InitStructHelper();
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -383,8 +383,7 @@ TEST_F(PositiveSecondaryCommandBuffer, EventStageMask) {
                       0, nullptr, 0, nullptr, 0, nullptr);
     commandBuffer.End();
 
-    m_default_queue->Submit(commandBuffer);
-    m_default_queue->Wait();
+    m_default_queue->SubmitAndWait(commandBuffer);
 }
 
 TEST_F(PositiveSecondaryCommandBuffer, EventsIn) {
@@ -529,11 +528,8 @@ TEST_F(PositiveSecondaryCommandBuffer, NestedDrawWithoutInline) {
     RETURN_IF_SKIP(Init());
 
     VkFormat color_format = VK_FORMAT_R8G8B8A8_UNORM;
-    VkPipelineRenderingCreateInfo pipeline_rendering_info = vku::InitStructHelper();
-    pipeline_rendering_info.colorAttachmentCount = 1;
-    pipeline_rendering_info.pColorAttachmentFormats = &color_format;
-
-    CreatePipelineHelper pipe(*this, &pipeline_rendering_info);
+    CreatePipelineHelper pipe(*this);
+    pipe.SetDynamicRendering({color_format});
     pipe.CreateGraphicsPipeline();
 
     VkCommandBufferInheritanceRenderingInfo inheritance_rendering_info = vku::InitStructHelper();
@@ -657,13 +653,8 @@ TEST_F(PositiveSecondaryCommandBuffer, CustomResolveDynamicRenderingInputAttachm
     input_info.pDepthInputAttachmentIndex = &zero;
     input_info.pStencilInputAttachmentIndex = nullptr;
 
-    VkPipelineRenderingCreateInfo pipeline_rendering_info = vku::InitStructHelper(&input_info);
-    pipeline_rendering_info.colorAttachmentCount = 0;
-    pipeline_rendering_info.pColorAttachmentFormats = nullptr;
-    pipeline_rendering_info.depthAttachmentFormat = depth_format;
-    pipeline_rendering_info.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
-
-    CreatePipelineHelper pipe(*this, &pipeline_rendering_info);
+    CreatePipelineHelper pipe(*this, &input_info);
+    pipe.SetDynamicRendering({}, depth_format, VK_FORMAT_UNDEFINED);
     pipe.ds_ci_ = vku::InitStructHelper();
     pipe.CreateGraphicsPipeline();
 

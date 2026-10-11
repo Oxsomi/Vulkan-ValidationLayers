@@ -184,8 +184,8 @@ void Swapchain::PresentImage(uint32_t image_index, uint64_t present_id, const Su
     }
 
     // Present id tracking
-    if (present_id > max_present_id) {
-        max_present_id = present_id;
+    if (present_id > max_present_id.load()) {
+        max_present_id.store(present_id);
     }
     if (present_id > 0) {
         // the present id ring buffer is allocated only when the application uses present ids
@@ -212,6 +212,7 @@ void Swapchain::AcquireImage(uint32_t image_index, const std::shared_ptr<vvl::Se
                              const std::shared_ptr<vvl::Fence>& fence_state) {
     acquired_images++;
     images[image_index].acquired = true;
+    images[image_index].ever_acquired = true;
     images[image_index].acquire_semaphore = semaphore_state;
     images[image_index].acquire_fence = fence_state;
 

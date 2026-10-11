@@ -56,6 +56,13 @@ struct HashedUint64 {
     }
 };
 
+// We query support to normally use the vkGetPhysicalDeviceFormatProperties2,
+// so we need to also ensure the app has it enabled as well
+static inline bool QueryFormatFeatureFlags2(const DeviceExtensions& extensions) {
+    return IsExtEnabled(extensions.vk_khr_get_physical_device_properties2) &&
+           IsExtSupported(extensions.vk_khr_format_feature_flags2);
+}
+
 namespace vvl {
 class BaseInstance;
 class BaseDevice;
@@ -74,7 +81,6 @@ struct DeviceExtensionProperties {
     VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperative_matrix_props_khr;
     VkPhysicalDeviceCooperativeMatrix2PropertiesNV cooperative_matrix_props2_nv;
     VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback_props;
-    VkPhysicalDeviceRayTracingPropertiesNV ray_tracing_props_nv;
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR ray_tracing_props_khr;
     VkPhysicalDeviceAccelerationStructurePropertiesKHR acc_structure_props;
     VkPhysicalDeviceFragmentDensityMapPropertiesEXT fragment_density_map_props;
@@ -106,6 +112,9 @@ struct DeviceExtensionProperties {
     VkPhysicalDeviceComputeShaderDerivativesPropertiesKHR compute_shader_derivatives_props;
     VkPhysicalDeviceCooperativeVectorPropertiesNV cooperative_vector_props_nv;
     VkPhysicalDeviceRenderPassStripedPropertiesARM renderpass_striped_props;
+    VkPhysicalDeviceSchedulingControlsPropertiesARM scheduling_controls_props;
+    VkPhysicalDeviceSchedulingControlsDispatchParametersPropertiesARM scheduling_controls_dispatch_props;
+    VkPhysicalDeviceShaderCoreBuiltinsPropertiesARM shader_core_builtins_props;
     VkPhysicalDeviceExternalMemoryHostPropertiesEXT external_memory_host_props;
     VkPhysicalDeviceMaintenance9PropertiesKHR maintenance9_props;
     VkPhysicalDeviceMaintenance10PropertiesKHR maintenance10_props;
@@ -124,6 +133,8 @@ struct DeviceExtensionProperties {
     VkPhysicalDeviceShaderLongVectorPropertiesEXT shader_long_vector_props;
     VkPhysicalDeviceTileShadingPropertiesQCOM tile_shading_props;
     VkPhysicalDeviceImageProcessing2PropertiesQCOM image_processing2_props;
+    VkPhysicalDeviceShaderMultipleWaitQueuesPropertiesQCOM shader_multiple_wait_queues_props;
+    VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE buffer_device_address_allocation_alignment_props;
 };
 
 // This object holds all static state for the device (device properties, enabled extensions/features, etc.)
@@ -198,14 +209,14 @@ class HandleWrapper : public Logger {
     HandleType Unwrap(HandleType wrapped_handle) {
         if (wrapped_handle == (HandleType)VK_NULL_HANDLE) return wrapped_handle;
         auto iter = unique_id_mapping.find(CastToUint64(wrapped_handle));
-        if (iter == unique_id_mapping.end()) return (HandleType)0;
+        if (iter == unique_id_mapping.end()) return passthrough_handles ? wrapped_handle : (HandleType)0;
         return (HandleType)iter->second;
     }
 
     // Wrap a newly created handle with a new unique ID, and return the new ID.
     template <typename HandleType>
     HandleType WrapNew(HandleType new_created_handle) {
-        if (new_created_handle == (HandleType)VK_NULL_HANDLE) return new_created_handle;
+        if (new_created_handle == (HandleType)VK_NULL_HANDLE || passthrough_handles) return new_created_handle;
         auto unique_id = global_unique_id++;
         unique_id = HashedUint64::hash(unique_id);
         assert(unique_id != 0);  // can't be 0, otherwise unwrap will apply special rule for VK_NULL_HANDLE
@@ -220,7 +231,7 @@ class HandleWrapper : public Logger {
         if (iter != unique_id_mapping.end()) {
             return CastFromUint64<HandleType>(iter->second);
         } else {
-            return CastFromUint<HandleType>(0ULL);
+            return passthrough_handles ? wrapped_handle : CastFromUint<HandleType>(0ULL);
         }
     }
 
@@ -231,7 +242,7 @@ class HandleWrapper : public Logger {
         if (iter != unique_id_mapping.end()) {
             return CastFromUint64<HandleType>(iter->second);
         } else {
-            return CastFromUint<HandleType>(0ULL);
+            return passthrough_handles ? wrapped_handle : CastFromUint<HandleType>(0ULL);
         }
     }
 
@@ -249,10 +260,19 @@ class HandleWrapper : public Logger {
     void UnwrapPnextChainHandles(const void* pNext);
     void UnwrapComputePipelineCreateInfoHandles(vku::safe_VkComputePipelineCreateInfo& safe_ci);
     void UnwrapGraphicsPipelineCreateInfoHandles(vku::safe_VkGraphicsPipelineCreateInfo& safe_ci);
+    void UnwrapShaderObjectCreateInfoHandles(vku::safe_VkShaderCreateInfoEXT& safe_ci);
 
     static std::atomic<uint64_t> global_unique_id;
     static vvl::concurrent_unordered_map<uint64_t, uint64_t, 4, HashedUint64> unique_id_mapping;
     static bool wrap_handles;
+
+    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/13329
+    // The driver calls the VK_EXT_device_memory_report callback directly, reporting its own handles, which the app could not match
+    // if they were wrapped.
+    // So handles created by a device using it are passed through as they are (as if handle wrapping was disabled).
+    // Handles wrapped by the instance (VkSurfaceKHR) are still found in |unique_id_mapping|, and everything not found there is one
+    // of this device's handles.
+    bool passthrough_handles = false;
 };
 
 class DispatchInstance : public HandleWrapper {
@@ -342,12 +362,18 @@ class DispatchDevice : public HandleWrapper {
     const VkPhysicalDeviceVulkan14Properties& phys_dev_props_core14;
     // To store the 2 lists from VkPhysicalDeviceHostImageCopyProperties
     const std::vector<VkImageLayout>& host_image_copy_props_copy_src_layouts;
-    const std::vector<VkImageLayout>& host_imape_copy_props_copy_dst_layouts;
+    const std::vector<VkImageLayout>& host_image_copy_props_copy_dst_layouts;
     const DeviceExtensionProperties& phys_dev_ext_props;
 
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     VkLayerDispatchTable device_dispatch_table;
+
+    // We need to get the format feature all over across multiple calls.
+    // A lot of time apps only use a few formats and just reusing them.
+    // Found a nice measurable improvement from traces to just cache these formats in a cache
+    VkFormatProperties3 GetFormatProperties(VkFormat format);
+    vvl::concurrent_unordered_map<VkFormat, VkFormatProperties3, 0> format_properties_cache;
 
     mutable std::vector<std::unique_ptr<BaseDevice>> object_dispatch;
     mutable std::vector<std::unique_ptr<BaseDevice>> aborted_object_dispatch;
