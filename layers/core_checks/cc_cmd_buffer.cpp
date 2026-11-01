@@ -306,10 +306,10 @@ bool CoreChecks::ValidateBeginCommandBufferInheritanceInfo(const vvl::CommandBuf
 
     if ((!info.occlusionQueryEnable || !enabled_features.occlusionQueryPrecise) &&
         (info.queryFlags & VK_QUERY_CONTROL_PRECISE_BIT)) {
-        skip |= LogError("VUID-vkBeginCommandBuffer-commandBuffer-00052", cb_state.Handle(), inheritance_loc,
-                         "Secondary %s must not have VK_QUERY_CONTROL_PRECISE_BIT if "
-                         "occlusionQuery is disabled or the device does not support precise occlusion queries.",
-                         FormatHandle(cb_state.Handle()).c_str());
+        skip |= LogError(
+            "VUID-vkBeginCommandBuffer-commandBuffer-00052", cb_state.Handle(), inheritance_loc.dot(Field::queryFlags),
+            "includes VK_QUERY_CONTROL_PRECISE_BIT, but %s.",
+            !info.occlusionQueryEnable ? "occlusionQueryEnable is VK_FALSE" : "the occlusionQueryPrecise feature was not enabled");
     }
     auto p_inherited_viewport_scissor_info =
         vku::FindStructInPNextChain<VkCommandBufferInheritanceViewportScissorInfoNV>(info.pNext);
@@ -2686,7 +2686,7 @@ bool CoreChecks::PreCallValidateCmdBeginTransformFeedbackEXT(VkCommandBuffer com
         skip |= LogError("VUID-vkCmdBeginTransformFeedbackEXT-firstCounter-09630", commandBuffer,
                          error_obj.location.dot(Field::firstCounterBuffer),
                          "is %" PRIu32 " and counterBufferCount is %" PRIu32
-                         " but vkCmdBindTransformFeedbackBuffersEXT only bound %" PRIu32 " buffers.",
+                         " but vkCmdBindTransformFeedbackBuffersEXT has only bound buffers to the first %" PRIu32 " bindings.",
                          firstCounterBuffer, counterBufferCount, cb_state->transform_feedback_buffers_bound);
     }
 
@@ -2742,7 +2742,7 @@ bool CoreChecks::PreCallValidateCmdBeginTransformFeedback2EXT(VkCommandBuffer co
         skip |= LogError("VUID-vkCmdBeginTransformFeedback2EXT-firstCounter-09630", commandBuffer,
                          error_obj.location.dot(Field::firstCounterRange),
                          "is %" PRIu32 " and counterBufferCount is %" PRIu32
-                         " but vkCmdBindTransformFeedbackBuffers2EXT only bound %" PRIu32 " buffers.",
+                         " but vkCmdBindTransformFeedbackBuffersEXT has only bound buffers to the first %" PRIu32 " bindings.",
                          firstCounterRange, counterRangeCount, cb_state->transform_feedback_buffers_bound);
     }
 

@@ -103,7 +103,7 @@ struct CreateGraphicsPipelines {
     bool is_modified = false;
     std::vector<vku::safe_VkGraphicsPipelineCreateInfo> modified_create_infos;
     const VkGraphicsPipelineCreateInfo* pCreateInfos = nullptr;
-    spirv::StatelessData stateless_data[kCommonMaxGraphicsShaderStages];
+    std::vector<std::vector<spirv::StatelessData>> stateless_data;
     // 2D array for [pipelineCount][stageCount]
     std::vector<std::vector<ShaderInstrumentationMetadata>> shader_instrumentations_metadata;
 
@@ -169,6 +169,13 @@ struct CreateBuffer {
     // pointer of the Safe Struct
     const VkBufferCreateInfo* create_info_copy;
     vku::safe_VkBufferCreateInfo modified_create_info;
+};
+
+struct AllocateMemory {
+    // To not waste time for CoreChecks we just copy the pointer, but if GPU-AV want to modifiy it, it will update pointer to be a
+    // pointer of the Safe Struct
+    const VkMemoryAllocateInfo* allocate_info_copy;
+    vku::safe_VkMemoryAllocateInfo modified_allocate_info;
 };
 
 }  // namespace chassis

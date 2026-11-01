@@ -43,10 +43,11 @@ static constexpr std::array<VkExtensionProperties, 4> kInstanceExtensions = {
     VkExtensionProperties{VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME, VK_EXT_VALIDATION_FEATURES_SPEC_VERSION},
     VkExtensionProperties{VK_EXT_LAYER_SETTINGS_EXTENSION_NAME, VK_EXT_LAYER_SETTINGS_SPEC_VERSION},
 };
-static constexpr std::array<VkExtensionProperties, 3> kDeviceExtensions = {
+static constexpr std::array<VkExtensionProperties, 4> kDeviceExtensions = {
     VkExtensionProperties{VK_EXT_VALIDATION_CACHE_EXTENSION_NAME, VK_EXT_VALIDATION_CACHE_SPEC_VERSION},
     VkExtensionProperties{VK_EXT_DEBUG_MARKER_EXTENSION_NAME, VK_EXT_DEBUG_MARKER_SPEC_VERSION},
     VkExtensionProperties{VK_EXT_TOOLING_INFO_EXTENSION_NAME, VK_EXT_TOOLING_INFO_SPEC_VERSION},
+    VkExtensionProperties{VK_EXT_FRAME_BOUNDARY_EXTENSION_NAME, VK_EXT_FRAME_BOUNDARY_SPEC_VERSION},
 };
 namespace vulkan_layer_chassis {
 static const VkLayerProperties global_layer = {
@@ -625,54 +626,6 @@ VKAPI_ATTR VkResult VKAPI_CALL DeviceWaitIdle(VkDevice device) {
             }
             auto lock = vo->WriteLock();
             vo->PostCallRecordDeviceWaitIdle(device, record_obj);
-        }
-    }
-    return result;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL AllocateMemory(VkDevice device, const VkMemoryAllocateInfo* pAllocateInfo,
-                                              const VkAllocationCallbacks* pAllocator, VkDeviceMemory* pMemory) {
-    VVL_ZoneScoped;
-
-    auto device_dispatch = vvl::GetDispatchDevice(device);
-    bool skip = false;
-    ErrorObject error_obj(vvl::Func::vkAllocateMemory, VulkanTypedHandle(device, kVulkanObjectTypeDevice));
-    {
-        VVL_ZoneScopedN("PreCallValidate_vkAllocateMemory");
-        for (const auto& vo : device_dispatch->intercept_vectors[InterceptIdPreCallValidateAllocateMemory]) {
-            if (!vo) {
-                continue;
-            }
-            auto lock = vo->ReadLock();
-            skip |= vo->PreCallValidateAllocateMemory(device, pAllocateInfo, pAllocator, pMemory, error_obj);
-            if (skip) return VK_ERROR_VALIDATION_FAILED_EXT;
-        }
-    }
-    RecordObject record_obj(vvl::Func::vkAllocateMemory);
-    {
-        VVL_ZoneScopedN("PreCallRecord_vkAllocateMemory");
-        for (auto& vo : device_dispatch->intercept_vectors[InterceptIdPreCallRecordAllocateMemory]) {
-            if (!vo) {
-                continue;
-            }
-            auto lock = vo->WriteLock();
-            vo->PreCallRecordAllocateMemory(device, pAllocateInfo, pAllocator, pMemory, record_obj);
-        }
-    }
-    VkResult result;
-    {
-        VVL_ZoneScopedN("Dispatch_vkAllocateMemory");
-        result = device_dispatch->AllocateMemory(device, pAllocateInfo, pAllocator, pMemory);
-    }
-    record_obj.result = result;
-    {
-        VVL_ZoneScopedN("PostCallRecord_vkAllocateMemory");
-        for (auto& vo : device_dispatch->intercept_vectors[InterceptIdPostCallRecordAllocateMemory]) {
-            if (!vo) {
-                continue;
-            }
-            auto lock = vo->WriteLock();
-            vo->PostCallRecordAllocateMemory(device, pAllocateInfo, pAllocator, pMemory, record_obj);
         }
     }
     return result;

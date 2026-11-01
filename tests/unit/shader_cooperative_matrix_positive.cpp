@@ -428,7 +428,7 @@ TEST_F(PositiveShaderCooperativeMatrix, BFloat16) {
     )glsl";
 
     CreateComputePipelineHelper pipe(*this);
-    pipe.cs_ = VkShaderObj(*m_device, cs_source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_1);
+    pipe.cs_ = VkShaderObj(*m_device, cs_source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_3);
     pipe.CreateComputePipeline();
 }
 
@@ -460,7 +460,7 @@ TEST_F(PositiveShaderCooperativeMatrix, Float8) {
     )glsl";
 
     CreateComputePipelineHelper pipe(*this);
-    pipe.cs_ = VkShaderObj(*m_device, cs_source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_1);
+    pipe.cs_ = VkShaderObj(*m_device, cs_source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_3);
     pipe.CreateComputePipeline();
 }
 
@@ -511,6 +511,57 @@ TEST_F(PositiveShaderCooperativeMatrix, Int8) {
     pipe.cp_ci_.layout = pl;
     pipe.CreateComputePipeline();
     m_errorMonitor->VerifyFound();
+}
+
+TEST_F(PositiveShaderCooperativeMatrix, IntegerTypeSignednessIgnoredForTypeMatching) {
+    TEST_DESCRIPTION("VK_COMPONENT_TYPE_SINT32_KHR and VK_COMPONENT_TYPE_UINT32_KHR both correspond to OpTypeInt 32 0/1");
+    SetTargetApiVersion(VK_API_VERSION_1_3);
+    RETURN_IF_SKIP(InitCooperativeMatrixKHR());
+    CooperativeMatrixHelper helper(*this);
+    const VkCooperativeMatrixPropertiesKHR* found = nullptr;
+    for (const auto& prop : helper.coop_matrix_props) {
+        if (prop.scope == VK_SCOPE_SUBGROUP_KHR &&
+            (prop.AType == VK_COMPONENT_TYPE_UINT32_KHR || prop.AType == VK_COMPONENT_TYPE_SINT32_KHR)) {
+            found = &prop;
+            break;
+        }
+    }
+    if (!found) {
+        GTEST_SKIP() << "No subgroup property with a 32-bit integer AType";
+    }
+    const bool prop_signed = found->AType == VK_COMPONENT_TYPE_SINT32_KHR;
+    const VkComponentTypeKHR other = prop_signed ? VK_COMPONENT_TYPE_UINT32_KHR : VK_COMPONENT_TYPE_SINT32_KHR;
+    for (const auto& prop : helper.coop_matrix_props) {
+        if (prop.scope == VK_SCOPE_SUBGROUP_KHR && prop.AType == other && prop.MSize == found->MSize &&
+            prop.KSize == found->KSize) {
+            GTEST_SKIP() << "Both signednesses are advertised";
+        }
+    }
+    std::string css = R"glsl(
+        #version 450 core
+        #pragma use_vulkan_memory_model
+        #extension GL_KHR_shader_subgroup_basic : enable
+        #extension GL_KHR_memory_scope_semantics : enable
+        #extension GL_KHR_cooperative_matrix : enable
+        #extension GL_EXT_shader_explicit_arithmetic_types : enable
+        layout(local_size_x = 64) in;
+        layout(set = 0, binding = 0) coherent buffer InputA { %T% x[]; } inputA;
+        coopmat<%T%, gl_ScopeSubgroup, %M%, %K%, gl_MatrixUseA> matA;
+        void main() { coopMatLoad(matA, inputA.x, 0, %K%, gl_CooperativeMatrixLayoutRowMajor); }
+    )glsl";
+    auto replace = [](std::string& str, const std::string& from, const std::string& to) {
+        size_t pos;
+        while ((pos = str.find(from)) != std::string::npos) str.replace(pos, from.length(), to);
+    };
+    replace(css, "%T%", prop_signed ? "uint32_t" : "int32_t");  // opposite SPIR-V signedness
+    replace(css, "%M%", std::to_string(found->MSize));
+    replace(css, "%K%", std::to_string(found->KSize));
+    OneOffDescriptorSet descriptor_set(m_device, {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}});
+    vkt::PipelineLayout pipeline_layout(*m_device, {&descriptor_set.layout_});
+    CreateComputePipelineHelper pipe(*this);
+    pipe.cs_ = VkShaderObj(*m_device, css.c_str(), VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_3);
+    pipe.cp_ci_.layout = pipeline_layout;
+    pipe.CreateComputePipeline();
 }
 
 TEST_F(PositiveShaderCooperativeMatrix, WorkgroupScopeLocalSizeIdSpecConstant) {
@@ -867,7 +918,7 @@ TEST_F(PositiveShaderCooperativeMatrix, Properties2RuntimeQuerySelectors) {
         const vkt::ShaderEXT shader(*m_device, create_info);
     };
 
-    create_shader_object(*default_config, props11.subgroupSize, 0);
+    create_shader_object(*default_config, props11.subgroupSize, VK_SHADER_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT);
 
     create_shader_object(*varying_config, subgroup_size_control_props.maxSubgroupSize,
                          VK_SHADER_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT_EXT | VK_SHADER_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT);

@@ -339,7 +339,7 @@ bool DetectCmdWaitEventsImageBarrierHazard(const SyncEnvironment& env, const Acc
         }
         const BarrierSet& barrier_set = barrier_sets[barrier_sets.size() == 1 ? 0 : event_index];
         for (const SyncImageBarrier& barrier : barrier_set.image_barriers) {
-            if (!barrier.image || !barrier.layout_transition) {
+            if (!barrier.image || !barrier.IsLayoutTransition()) {
                 continue;
             }
             const HazardResult hazard = access_context.DetectImageBarrierHazard(
@@ -406,12 +406,9 @@ void ApplyCmdWaitEvents(SyncEnvironment& env, AccessContext& access_context,
 
     assert(barrier_sets.size() == 1 || (barrier_sets.size() == events.size()));
 
-    // Apply markup action.
-    // The markup action does not change any access state but it can trim the access map according to the
-    // provided range and creates infill ranges if necessary (for layout transitions). The purpose of all
-    // this is to ensure that after markup action the topology of access map ranges is finalized for the
-    // duration of barrier application (so we can cache pointers to specific access states with a goal
-    // to apply pending barriers in the end).
+    // Markup splits entries at barrier boundaries and fills map gaps and absent outside spans for
+    // layout transitions. This finalizes the map structure before collecting access state pointers
+    // for pending barriers.
     //
     // NOTE: event's global barriers can split() access map because EventSimpleRangeGenerator filters kFullRange.
     // That's why, in contrast to ApplyBarrier, we need apply markup action also to global barriers.
@@ -447,8 +444,8 @@ void ApplyCmdWaitEvents(SyncEnvironment& env, AccessContext& access_context,
                 env.validator.enabled_features, sub_state.base.GetImageType(), sub_state.base.create_flags);
             ImageRangeGen range_gen = sub_state.MakeImageRangeGen(barrier.subresource_range, can_transition_depth_slices);
             EventImageRangeGenerator filtered_range_gen(sync_event->FirstScope(), range_gen);
-            ApplyMarkupFunctor markup_action(barrier.layout_transition);
-            if (barrier.layout_transition) {
+            ApplyMarkupFunctor markup_action(barrier.IsLayoutTransition());
+            if (barrier.IsLayoutTransition()) {
                 // The transition writes the whole barrier range, including regions that had
                 // no access before SetEvent. Only its source accesses are limited by the event.
                 access_context.UpdateMemoryAccessState(markup_action, range_gen);
@@ -499,7 +496,7 @@ void ApplyCmdWaitEvents(SyncEnvironment& env, AccessContext& access_context,
         for (const SyncImageBarrier& barrier : barrier_set.image_barriers) {
             const SyncBarrier event_barrier = RestrictToEvent(barrier.barrier, *sync_event);
             const BarrierScope barrier_scope(event_barrier, env.queue_id, sync_event->first_scope_tag);
-            CollectBarriersFunctor collect_barriers(access_context, barrier_scope, event_barrier, barrier.layout_transition,
+            CollectBarriersFunctor collect_barriers(access_context, barrier_scope, event_barrier, barrier.IsLayoutTransition(),
                                                     barrier.handle_index, pending_barriers);
 
             const auto& sub_state = SubState(*barrier.image);
@@ -508,7 +505,7 @@ void ApplyCmdWaitEvents(SyncEnvironment& env, AccessContext& access_context,
             ImageRangeGen range_gen = sub_state.MakeImageRangeGen(barrier.subresource_range, can_transition_depth_slices);
             EventImageRangeGenerator filtered_range_gen(sync_event->FirstScope(), range_gen);
 
-            if (barrier.layout_transition) {
+            if (barrier.IsLayoutTransition()) {
                 access_context.UpdateMemoryAccessState(collect_barriers, range_gen);
             } else {
                 access_context.UpdateMemoryAccessState(collect_barriers, filtered_range_gen);

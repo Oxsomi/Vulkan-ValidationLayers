@@ -396,8 +396,10 @@ bool Device::manual_PreCallValidateCreateImage(VkDevice device, const VkImageCre
     if (api_version < VK_API_VERSION_1_3 && !enabled_features.ycbcr2plane444Formats) {
         if (IsValueIn(image_format, {VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16,
                                      VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16, VK_FORMAT_G16_B16R16_2PLANE_444_UNORM})) {
-            skip |= LogError("VUID-VkImageCreateInfo-None-12279", device, create_info_loc.dot(Field::format), "is %s.",
-                             string_VkFormat(image_format));
+            skip |= LogError(
+                "VUID-VkImageCreateInfo-None-12279", device, create_info_loc.dot(Field::format),
+                "is %s.\nHint: This format can be used with Vulkan 1.3 or if the ycbcr2plane444Formats feature is enabled.",
+                string_VkFormat(image_format));
         }
     }
 
@@ -421,7 +423,9 @@ bool Device::ValidateCreateImageSparse(const VkImageCreateInfo& create_info, con
         }
         if ((!enabled_features.maintenance9 || !phys_dev_ext_props.maintenance9_props.image2DViewOf3DSparse) &&
             create_flags & VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT) {
-            skip |= LogError("VUID-VkImageCreateInfo-imageType-10197", device, create_flags_loc, "is %s.",
+            skip |= LogError("VUID-VkImageCreateInfo-imageType-10197", device, create_flags_loc,
+                             "is %s.\nHint: This can be allowed if maintenance9 feature is enabled and "
+                             "VkPhysicalDeviceMaintenance9PropertiesKHR::image2DViewOf3DSparse is supported.",
                              string_VkImageCreateFlags2KHR(create_flags).c_str());
         }
         if (create_flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) {
@@ -1009,8 +1013,10 @@ bool Device::ValidateImageViewCreateInfo(const VkImageViewCreateInfo& create_inf
         if (IsValueIn(create_info.format,
                       {VK_FORMAT_G8_B8R8_2PLANE_444_UNORM, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_444_UNORM_3PACK16,
                        VK_FORMAT_G12X4_B12X4R12X4_2PLANE_444_UNORM_3PACK16, VK_FORMAT_G16_B16R16_2PLANE_444_UNORM})) {
-            skip |= LogError("VUID-VkImageViewCreateInfo-None-12280", create_info.image, create_info_loc.dot(Field::format),
-                             "is %s.", string_VkFormat(create_info.format));
+            skip |= LogError(
+                "VUID-VkImageViewCreateInfo-None-12280", create_info.image, create_info_loc.dot(Field::format),
+                "is %s.\nHint: This format can be used with Vulkan 1.3 or if the ycbcr2plane444Formats feature is enabled.",
+                string_VkFormat(create_info.format));
         }
     }
 

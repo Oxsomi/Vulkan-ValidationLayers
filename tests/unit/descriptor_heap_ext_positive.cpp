@@ -1121,6 +1121,34 @@ TEST_F(PositiveDescriptorHeapEXT, EmbeddedSamplerNoBoundHeap) {
     m_default_queue->SubmitAndWait(m_command_buffer);
 }
 
+TEST_F(PositiveDescriptorHeapEXT, WriteDescriptorsAdjacentRanges) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+
+    const size_t sampler_size = static_cast<size_t>(heap_props.samplerDescriptorSize);
+    const size_t buffer_desc_size = static_cast<size_t>(heap_props.bufferDescriptorSize);
+    std::vector<uint8_t> data(std::max(sampler_size, buffer_desc_size) * 3);
+
+    const VkSamplerCreateInfo sampler_cis[3] = {SafeSaneSamplerCreateInfo(), SafeSaneSamplerCreateInfo(),
+                                                SafeSaneSamplerCreateInfo()};
+    VkHostAddressRangeEXT sampler_descriptors[3] = {
+        {data.data() + sampler_size * 2, sampler_size}, {data.data(), sampler_size}, {data.data() + sampler_size, sampler_size}};
+    vk::WriteSamplerDescriptorsEXT(device(), 3u, sampler_cis, sampler_descriptors);
+
+    vkt::Buffer buffer(*m_device, 256, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vkt::device_address);
+    const VkDeviceAddressRangeEXT address_range = buffer.AddressRange();
+
+    VkResourceDescriptorInfoEXT resource_infos[3];
+    for (VkResourceDescriptorInfoEXT& resource_info : resource_infos) {
+        resource_info = vku::InitStructHelper();
+        resource_info.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        resource_info.data.pAddressRange = &address_range;
+    }
+    VkHostAddressRangeEXT resource_descriptors[3] = {{data.data() + buffer_desc_size, buffer_desc_size},
+                                                     {data.data() + buffer_desc_size * 2, buffer_desc_size},
+                                                     {data.data(), buffer_desc_size}};
+    vk::WriteResourceDescriptorsEXT(device(), 3u, resource_infos, resource_descriptors);
+}
+
 TEST_F(PositiveDescriptorHeapEXT, MappingSourceHeapWithPushIndex) {
     AddRequiredFeature(vkt::Feature::vertexPipelineStoresAndAtomics);
     RETURN_IF_SKIP(InitBasicDescriptorHeap());
@@ -1967,9 +1995,9 @@ TEST_F(PositiveDescriptorHeapEXT, PushDataUnusedHole) {
     vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
 
     m_command_buffer.Begin();
-    uint8_t data = 0;
-    m_command_buffer.PushDataEXT(0, 4, &data);
-    m_command_buffer.PushDataEXT(32, 4, &data);
+    uint32_t data = 0;
+    m_command_buffer.PushDataEXT(0, sizeof(data), &data);
+    m_command_buffer.PushDataEXT(32, sizeof(data), &data);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
     desc_heap.BindResourceHeap(m_command_buffer);
     // TODO - Remove this false positive
@@ -2013,9 +2041,9 @@ TEST_F(PositiveDescriptorHeapEXT, PushDataUnusedStructStaticIndex) {
     vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_2, &mapping_info);
 
     m_command_buffer.Begin();
-    uint8_t data = 0;
-    m_command_buffer.PushDataEXT(0, 4, &data);
-    m_command_buffer.PushDataEXT(24, 4, &data);
+    uint32_t data = 0;
+    m_command_buffer.PushDataEXT(0, sizeof(data), &data);
+    m_command_buffer.PushDataEXT(24, sizeof(data), &data);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
     desc_heap.BindResourceHeap(m_command_buffer);
     // TODO - Remove this false positive
@@ -2085,9 +2113,9 @@ TEST_F(PositiveDescriptorHeapEXT, PushDataUnusedChainedAccessChains) {
     vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_2, &mapping_info, SPV_SOURCE_ASM);
 
     m_command_buffer.Begin();
-    uint8_t data = 0;
-    m_command_buffer.PushDataEXT(0, 4, &data);
-    m_command_buffer.PushDataEXT(24, 4, &data);
+    uint32_t data = 0;
+    m_command_buffer.PushDataEXT(0, sizeof(data), &data);
+    m_command_buffer.PushDataEXT(24, sizeof(data), &data);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
     desc_heap.BindResourceHeap(m_command_buffer);
     // TODO - Remove this false positive
@@ -3617,6 +3645,48 @@ TEST_F(PositiveDescriptorHeapEXT, SecondSamplerHeap) {
     m_default_queue->SubmitAndWait(cb2);
 }
 
+TEST_F(PositiveDescriptorHeapEXT, ArrayLengthBufferOfSameType) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+    const char* cs_source = R"(
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpDecorate %rta ArrayStride 4
+               OpMemberDecorate %SSBO 0 Offset 0
+               OpDecorate %SSBO BufferBlock
+               OpDecorate %a DescriptorSet 0
+               OpDecorate %a Binding 0
+               OpDecorate %b DescriptorSet 0
+               OpDecorate %b Binding 1
+       %void = OpTypeVoid
+       %func = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+        %rta = OpTypeRuntimeArray %uint
+       %SSBO = OpTypeStruct %rta
+   %ptr_ssbo = OpTypePointer Uniform %SSBO
+   %ptr_uint = OpTypePointer Uniform %uint
+          %a = OpVariable %ptr_ssbo Uniform
+          %b = OpVariable %ptr_ssbo Uniform
+       %main = OpFunction %void None %func
+      %label = OpLabel
+        %len = OpArrayLength %uint %b 0
+         %pa = OpAccessChain %ptr_uint %a %int_0 %int_0
+               OpStore %pa %len
+               OpReturn
+               OpFunctionEnd
+    )";
+    VkDescriptorSetAndBindingMappingEXT mappings[2];
+    mappings[0] = MakeZeroSetAndBindingMappingEXT(0, 0, VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT);
+    mappings[1] = MakeZeroSetAndBindingMappingEXT(0, 1, VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT);
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 2u;
+    mapping_info.pMappings = mappings;
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info, SPV_SOURCE_ASM);
+}
+
 TEST_F(PositiveDescriptorHeapEXT, InputAttachment) {
     RETURN_IF_SKIP(InitBasicDescriptorHeap());
     InitRenderTarget();
@@ -3763,4 +3833,43 @@ TEST_F(PositiveDescriptorHeapEXT, InputAttachmentLocalRead) {
     m_command_buffer.EndRendering();
     m_command_buffer.End();
     m_default_queue->SubmitAndWait(m_command_buffer);
+}
+
+TEST_F(PositiveDescriptorHeapEXT, EmbeddedSamplerOtherResourceType) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+    if (heap_props.minSamplerHeapReservedRangeWithEmbedded <= heap_props.minSamplerHeapReservedRange) {
+        GTEST_SKIP() << "minSamplerHeapReservedRangeWithEmbedded is not greater than minSamplerHeapReservedRange";
+    }
+
+    vkt::DescriptorHeapEXT desc_heap(*this);
+    desc_heap.CreateResourceHeap(heap_props.imageDescriptorSize);
+    desc_heap.CreateSamplerHeap(heap_props.samplerDescriptorSize);
+
+    const char* cs_source = R"glsl(
+        #version 450
+        layout(set = 0, binding = 1) uniform sampler2D tex;
+        void main() {
+            vec4 color = textureLod(tex, vec2(0.0f), 0.0f);
+        }
+    )glsl";
+
+    VkSamplerCreateInfo embedded_sampler = vku::InitStructHelper();
+    VkDescriptorSetAndBindingMappingEXT mappings[2];
+    mappings[0] = MakeSetAndBindingMappingEXT(0, 1, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLER_BIT_EXT);
+    mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+    mappings[0].sourceData.constantOffset.pEmbeddedSampler = &embedded_sampler;
+    mappings[1] = MakeSetAndBindingMappingEXT(0, 1, 1, VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT);
+    mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 2u;
+    mapping_info.pMappings = mappings;
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+
+    m_command_buffer.Begin();
+    desc_heap.BindResourceHeap(m_command_buffer);
+    desc_heap.BindSamplerHeap(m_command_buffer);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    vk::CmdDispatch(m_command_buffer, 1u, 1u, 1u);
+    m_command_buffer.End();
 }

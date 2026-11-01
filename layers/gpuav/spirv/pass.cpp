@@ -817,6 +817,13 @@ InjectConditionalData Pass::InjectFunctionPre(Function& function, const BasicBlo
             // We need to put any intermittent instructions here so Phi is first in the merge block
             invalid_block.CreateInstruction(spv::OpConvertUToPtr, {phi_type.Id(), null_id, null_constant.Id()});
             module_.AddCapability(spv::CapabilityInt64);
+        } else if (phi_type.spv_type_ == SpvType::kAccelerationStructureKHR) {
+            // Can't create ConstantNull of acceleration structure type either, so convert uvec2 zero (no Int64 needed)
+            const Type& uvec2_type = type_manager_.GetTypeVector(type_manager_.GetTypeInt(32, false), 2);
+            const Constant& null_constant = type_manager_.GetConstantNull(uvec2_type);
+            null_id = module_.TakeNextId();
+            invalid_block.CreateInstruction(spv::OpConvertUToAccelerationStructureKHR,
+                                            {phi_type.Id(), null_id, null_constant.Id()});
         } else {
             if ((phi_type.spv_type_ == SpvType::kInt || phi_type.spv_type_ == SpvType::kFloat) &&
                 phi_type.meta_.scalar.bit_width < 32) {
@@ -842,13 +849,19 @@ InjectConditionalData Pass::InjectFunctionPre(Function& function, const BasicBlo
 
     // When skipping some instructions, we need something valid to replace it
     if (target_inst.Opcode() == spv::OpRayQueryInitializeKHR) {
-        // Currently assume the RayQuery and AS object were valid already
+        // Currently assume the RayQuery object was valid already
+        // The AS object is not, as it might have been loaded from an invalid descriptor, so use a null one
+        const Type& uvec2_type = type_manager_.GetTypeVector(type_manager_.GetTypeInt(32, false), 2);
+        const Constant& null_constant = type_manager_.GetConstantNull(uvec2_type);
+        const uint32_t null_as_id = module_.TakeNextId();
+        invalid_block.CreateInstruction(spv::OpConvertUToAccelerationStructureKHR,
+                                        {type_manager_.GetTypeAccelerationStructure().Id(), null_as_id, null_constant.Id()});
+
         const uint32_t uint32_0_id = type_manager_.GetConstantZeroUint32().Id();
         const uint32_t float32_0_id = type_manager_.GetConstantZeroFloat32().Id();
         const uint32_t vec3_0_id = type_manager_.GetConstantZeroVec3().Id();
-        invalid_block.CreateInstruction(spv::OpRayQueryInitializeKHR,
-                                        {target_inst.Operand(0), target_inst.Operand(1), uint32_0_id, uint32_0_id, vec3_0_id,
-                                         float32_0_id, vec3_0_id, float32_0_id});
+        invalid_block.CreateInstruction(spv::OpRayQueryInitializeKHR, {target_inst.Operand(0), null_as_id, uint32_0_id, uint32_0_id,
+                                                                       vec3_0_id, float32_0_id, vec3_0_id, float32_0_id});
     }
 
     invalid_block.CreateInstruction(spv::OpBranch, {merge_block_label});

@@ -519,11 +519,11 @@ std::string FormatErrorMessage(const SyncEnvironment& env, const HazardResult& h
     }
 
     // Synchronization information
-    const bool cross_queue_racing_hazard = hazard_info.IsRacingHazard() && env.queue_id != kQueueIdInvalid;
+    const bool cross_queue_racing_hazard = hazard_info.IsRacingHazard() && hazard.PriorQueue() != env.queue_id;
     ss << "\n";
     if (cross_queue_racing_hazard) {
-        ss << "The RACING hazard means the two submissions on different queues are not synchronized with each other, so the order "
-              "of their accesses is undefined. Synchronize the submissions so that one runs before the other.";
+        ss << "\nThe RACING hazard means the two submissions on different queues are not synchronized with each other, so the "
+              "order of their accesses is undefined. Synchronize the submissions so that one runs before the other.\n";
     } else if (missing_synchronization) {
         const char* access_type = hazard_info.IsWrite() ? "write" : "read";
         const char* prior_access_type = hazard_info.IsPriorWrite() ? "write" : "read";
@@ -620,6 +620,12 @@ std::string FormatErrorMessage(const SyncEnvironment& env, const HazardResult& h
               "cannot introduce this specific hazard.";
     }
 
+    if (hazard.PriorQueue() == env.queue_id && prior_access.access_index == SYNC_IMAGE_LAYOUT_TRANSITION &&
+        (hazard.State().access_state->LastWrite().flags & SyncFlag::kExternalDependenciesMissFinalTransition)) {
+        ss << "\nHint: None of the explicit dependencies to VK_SUBPASS_EXTERNAL starts from a subpass that uses this attachment, "
+              "so they do not synchronize its final layout transition. Check their srcSubpass.";
+    }
+
     if (!additional_info.message_end_text.empty()) {
         ss << additional_info.message_end_text;
     }
@@ -695,7 +701,7 @@ static ResourceUsageInfo GetResourceUsageInfoFromRecord(ResourceUsageTagEx tag_e
             const bool valid_handle_index = tag_ex.handle_index < handle_records.size();
             if (valid_handle_index) {
                 info.resource_handle = handle_records[tag_ex.handle_index].TypedHandle();
-                // TODO: also extract optional index or get rid of index
+                info.image_barrier = cb_context.cb_context.GetImageBarrier(record, tag_ex.handle_index);
             }
         }
         // Debug region name. Empty name means that we are not inside any debug region.

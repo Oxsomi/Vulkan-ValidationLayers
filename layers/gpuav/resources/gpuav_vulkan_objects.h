@@ -19,11 +19,13 @@
 
 #include "external/vma/vma.h"
 
-#include <typeinfo>
-#include <vector>
-#include <cassert>
 #include "containers/custom_containers.h"
 #include "containers/range.h"
+
+#include <cassert>
+#include <memory>
+#include <typeinfo>
+#include <vector>
 
 struct Location;
 
@@ -202,6 +204,23 @@ class GpuResourcesManager {
     } buffer_caches_;
 };
 
+// A GpuResourcesManager is needed per queue submission.
+// Use this cache to avoid creating/destroying them for each submission.
+class GpuResourcesManagerCache {
+  public:
+    explicit GpuResourcesManagerCache(Validator& gpuav) : gpuav_(gpuav) {}
+    ~GpuResourcesManagerCache();
+    GpuResourcesManager* Get();
+    // WARNING: GPU must be done with the manager's resources
+    void Return(GpuResourcesManager* manager);
+
+  private:
+    Validator& gpuav_;
+    std::mutex lock_;
+    std::vector<std::unique_ptr<GpuResourcesManager>> managers_;
+    std::vector<GpuResourcesManager*> available_managers_;
+};
+
 class StagingBuffer {
   public:
     static bool CanDeviceEverStage(Validator &gpuav);
@@ -246,7 +265,7 @@ class SharedResourcesCache {
     // Try get an object, returns null if not found
     template <typename T>
     T *TryGet() {
-        std::unique_lock<std::mutex> lock(mtx, std::defer_lock);
+        std::unique_lock<std::recursive_mutex> lock(mtx, std::defer_lock);
         if (thread_safe) {
             lock.lock();
         }
@@ -260,7 +279,7 @@ class SharedResourcesCache {
     }
     template <typename T>
     const T *TryGet() const {
-        std::unique_lock<std::mutex> lock(mtx, std::defer_lock);
+        std::unique_lock<std::recursive_mutex> lock(mtx, std::defer_lock);
         if (thread_safe) {
             lock.lock();
         }
@@ -297,7 +316,7 @@ class SharedResourcesCache {
         if (t) {
             return *t;
         }
-        std::unique_lock<std::mutex> lock(mtx, std::defer_lock);
+        std::unique_lock<std::recursive_mutex> lock(mtx, std::defer_lock);
         if (thread_safe) {
             lock.lock();
         }
@@ -325,7 +344,7 @@ class SharedResourcesCache {
     struct EqualTo {
         bool operator()(TypeInfoRef lhs, TypeInfoRef rhs) const { return lhs.get() == rhs.get(); }
     };
-    mutable std::mutex mtx;
+    mutable std::recursive_mutex mtx;
     vvl::unordered_map<TypeInfoRef, std::pair<void * /*object*/, void (*)(void *) /*object destructor*/>, Hasher, EqualTo>
         shared_validation_resources_map_;
 };

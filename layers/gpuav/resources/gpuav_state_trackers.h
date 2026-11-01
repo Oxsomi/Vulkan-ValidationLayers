@@ -34,6 +34,7 @@
 #include "gpuav/validation_cmd/gpuav_ray_tracing.h"
 #include "state_tracker/buffer_state.h"
 #include "state_tracker/cmd_buffer_state.h"
+#include "state_tracker/descriptor_mode.h"
 #include "state_tracker/image_state.h"
 #include "state_tracker/pipeline_state.h"
 #include "state_tracker/push_constant_data.h"
@@ -42,12 +43,15 @@
 #include "state_tracker/sampler_state.h"
 #include "state_tracker/shader_object_state.h"
 #include "state_tracker/tensor_state.h"
-#include "state_tracker/descriptor_mode.h"
 
 struct LastBound;
 
 namespace spirv {
 struct Module;
+}
+
+namespace vko {
+class GpuResourcesManager;
 }
 
 namespace gpuav {
@@ -81,13 +85,18 @@ class CommandBufferSubState : public vvl::CommandBufferSubState {
     using OnCommandBufferSubmission =
         stdext::inplace_function<void(Validator &gpuav, CommandBufferSubState &cb, VkCommandBuffer per_submission_cb)>;
     using OnCommandBufferCompletion =
-        stdext::inplace_function<bool(Validator& gpuav, CommandBufferSubState& cb, const vvl::CommandBufferSubmitInfo& cb_info,
+        stdext::inplace_function<bool(Validator& gpuav, CommandBufferSubState& cb, gpuav::QueueSubmission& queue_submission,
+                                      gpuav::CommandBufferSubmitInfo& cb_submit_info, const vvl::CommandBufferSubmitInfo& cb_info,
                                       const Location& submission_loc),
                                  64>;
     using OnPreCommandBufferSubmission =
-        stdext::inplace_function<void(Validator &gpuav, CommandBufferSubState &cb, VkCommandBuffer per_pre_submission_cb), 48>;
+        stdext::inplace_function<void(Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_pre_submission_cb,
+                                      gpuav::QueueSubmission& queue_submission, gpuav::CommandBufferSubmitInfo& cb_submit_info),
+                                 48>;
     using OnPostCommandBufferSubmission =
-        stdext::inplace_function<void(Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_post_submission_cb), 32>;
+        stdext::inplace_function<void(Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_post_submission_cb,
+                                      gpuav::QueueSubmission& queue_submission, gpuav::CommandBufferSubmitInfo& cb_submit_info),
+                                 32>;
     using OnPostCallRecordCmdBuildAccelerationStructures =
         stdext::inplace_function<void(Validator& gpuav, CommandBufferSubState& cb), 64>;
     std::vector<OnInstrumentationErrorLoggerRegister> on_instrumentation_error_logger_register_functions;
@@ -113,9 +122,12 @@ class CommandBufferSubState : public vvl::CommandBufferSubState {
     CommandBufferSubState(Validator &gpuav, vvl::CommandBuffer &cb);
     ~CommandBufferSubState();
 
-    [[nodiscard]] bool PreSubmit(QueueSubState &queue, const Location &loc);
-    [[nodiscard]] bool PostSubmit(QueueSubState &queue, const Location &loc);
-    void OnCompletion(VkQueue queue, const vvl::CommandBufferSubmitInfo& cb_info, const Location& loc);
+    [[nodiscard]] bool PreSubmit(QueueSubState& queue, const Location& loc, gpuav::QueueSubmission& queue_submission,
+                                 gpuav::CommandBufferSubmitInfo& cb_submit_info);
+    [[nodiscard]] bool PostSubmit(QueueSubState& queue, const Location& loc, gpuav::QueueSubmission& queue_submission,
+                                  gpuav::CommandBufferSubmitInfo& cb_submit_info);
+    void OnCompletion(VkQueue queue, gpuav::QueueSubmission& queue_submission, gpuav::CommandBufferSubmitInfo& cb_submit_info,
+                      const vvl::CommandBufferSubmitInfo& cb_info, const Location& submission_loc);
 
     const VkDescriptorSetLayout &GetInstrumentationDescriptorSetLayout() const {
         assert(instrumentation_desc_set_layout_ != VK_NULL_HANDLE);
@@ -129,9 +141,9 @@ class CommandBufferSubState : public vvl::CommandBufferSubState {
 
     VkDeviceSize GetCmdErrorsCountsBufferByteSize() const { return 8192 * sizeof(uint32_t); }
 
-    const VkBuffer &GetCmdErrorsCountsBuffer() const {
-        assert(cmd_errors_counts_buffer_.VkHandle() != VK_NULL_HANDLE);
-        return cmd_errors_counts_buffer_.VkHandle();
+    const vko::Buffer& GetCmdErrorsCountsBuffer() const {
+        assert(!cmd_errors_counts_buffer_.IsDestroyed());
+        return cmd_errors_counts_buffer_;
     }
 
     void Destroy() final;
@@ -273,8 +285,9 @@ class QueueSubState : public vvl::QueueSubState {
     Validator &gpuav_;
     VkCommandPool barrier_command_pool_{VK_NULL_HANDLE};
     VkCommandBuffer barrier_command_buffer_{VK_NULL_HANDLE};
+    std::vector<std::vector<vvl::CommandBufferSubmitInfo>> retiring_;
+    std::vector<vvl::QueueSubmission::GpuAV> retiring_gpuav_;
     VkSemaphore barrier_sem_{VK_NULL_HANDLE};
-    std::deque<std::vector<vvl::CommandBufferSubmitInfo>> retiring_;
     const bool timeline_khr_;
 };
 
@@ -446,6 +459,10 @@ class ShaderObjectSubState : public vvl::ShaderObjectSubState {
     spirv::InstrumentationStatus instrumented_status;
     uint32_t unique_shader_id = 0;
 
+    // Pipeline layout composed from this shader object set layouts and push constant ranges, plus the instrumentation set
+    // Created and cached on first call, one per descriptor mode
+    VkPipelineLayout GetPipelineLayoutUnion(const LastBound& last_bound, const Location& loc, vvl::DescriptorMode mode) const;
+
     // We need to keep incase the user calls vkGetShaderBinaryDataEXT
     vku::safe_VkShaderCreateInfoEXT original_create_info;
     VkShaderEXT original_handle = VK_NULL_HANDLE;
@@ -455,8 +472,9 @@ class ShaderObjectSubState : public vvl::ShaderObjectSubState {
 
   private:
     Validator& gpuav_;
+    mutable VkPipelineLayout instrumentation_pipeline_layouts_[vvl::DescriptorModeCount] = {};
     // Multiple threads can record multiple commands using the same shader,
-    // so shader destruction has to be thread safe
+    // so instrumentation pipeline layouts access and shader destruction have to be thread safe
     mutable std::mutex mutex_{};
 };
 
@@ -484,6 +502,8 @@ class PipelineSubState : public vvl::PipelineSubState {
     gpuav::spirv::InstrumentationStatus status;
     // When we instrument GPL at link time, we need to hold the libraries created by GPU-AV so they can be re-used
     VkPipeline instrumented_pipeline_lib = VK_NULL_HANDLE;
+    // Ids in GpuShaderInstrumentor::instrumented_shaders_map_ to remove when the pipeline is destroyed
+    std::vector<uint32_t> instrumented_shader_ids;
 
     // Multiple threads can record multiple commands using the same pipeline,
     // so layout recreation and deferred pipeline destruction have to be thread safe

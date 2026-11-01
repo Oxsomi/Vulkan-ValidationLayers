@@ -88,6 +88,12 @@ void DecorationBase::Add(uint32_t decoration, uint32_t value) {
         case spv::DecorationPerPrimitiveEXT:  // VK_EXT_mesh_shader
             flags |= per_primitive_ext;
             break;
+        case spv::DecorationFlat:
+            flags |= flat_bit;
+            break;
+        case spv::DecorationNoPerspective:
+            flags |= no_perspective_bit;
+            break;
         case spv::DecorationOffset:
             offset = value;
             break;
@@ -137,9 +143,11 @@ uint32_t DecorationBase::GetArrayStride(const Module& module_state,
 void DecorationSet::Add(uint32_t decoration, uint32_t value) {
     switch (decoration) {
         case spv::DecorationDescriptorSet:
+            flags |= descriptor_set_bit;
             set = value;
             break;
         case spv::DecorationBinding:
+            flags |= binding_bit;
             binding = value;
             break;
         case spv::DecorationInputAttachmentIndex:
@@ -460,6 +468,9 @@ static void FindPointersAndObjects(const Instruction& insn, vvl::unordered_set<u
         case spv::OpArrayLength:
             // This is not an access of memory, but counts as static usage of the variable
             result.insert(insn.Word(3));
+            break;
+        case spv::OpUntypedArrayLengthKHR:
+            result.insert(insn.Word(4));  // ptr
             break;
         case spv::OpFunctionCall:
             for (uint32_t i = 3; i < insn.Length(); i++) {
@@ -934,6 +945,7 @@ EntryPoint::EntryPoint(const Module& module_state, const Instruction& entrypoint
             for (const auto& slot : variable.interface_slots) {
                 if (variable.storage_class == spv::StorageClassInput) {
                     input_interface_slots[slot] = &variable;
+                    input_interface_locations.insert(slot.Location());
                     if (!max_input_slot || slot.slot > max_input_slot->slot) {
                         max_input_slot = &slot;
                         max_input_slot_variable = &variable;
@@ -1497,7 +1509,7 @@ std::string Module::GetDecorations(uint32_t id) const {
         if (insn.Opcode() == spv::OpFunction) {
             break;  // decorations are found before first function block
         } else if (insn.Opcode() == spv::OpDecorate && insn.Word(1) == id) {
-            ss << " " << string_SpvDecoration(insn.Word(2));
+            ss << " " << spv::DecorationToString(static_cast<spv::Decoration>(insn.Word(2)));
         }
     }
     return ss.str();
@@ -1565,7 +1577,7 @@ void Module::DescribeTypeInner(std::ostringstream& ss, uint32_t type, uint32_t i
             DescribeTypeInner(ss, insn->Word(2), indent);
             break;
         case spv::OpTypePointer:
-            ss << "pointer to " << string_SpvStorageClass(insn->Word(2)) << " -> ";
+            ss << "pointer to " << spv::StorageClassToString(static_cast<spv::StorageClass>(insn->Word(2))) << " -> ";
             DescribeTypeInner(ss, insn->Word(3), indent);
             break;
         case spv::OpTypeStruct: {
@@ -1721,7 +1733,7 @@ LocalSize Module::FindLocalSize(const EntryPoint& entrypoint) const {
     return local_size;
 }
 
-uint32_t Module::CalculateWorkgroupSharedMemory() const {
+uint32_t Module::CalculateWorkgroupSharedMemory(const EntryPoint& entrypoint) const {
     uint32_t total_size = 0;
     // when using WorkgroupMemoryExplicitLayoutKHR
     // either all or none the structs are decorated with Block,
@@ -1729,24 +1741,46 @@ uint32_t Module::CalculateWorkgroupSharedMemory() const {
     // In this case we want to find the MAX not ADD the block sizes
     bool find_max_block = false;
 
+    constexpr uint32_t spirv_version_1_4 = 0x00010400;
+    const bool spirv_1_4_or_later = words_[1] >= spirv_version_1_4;
+
     for (const Instruction* insn : static_data_.variable_inst) {
-        // StorageClass Workgroup is shared memory
-        if (insn->StorageClass() == spv::StorageClassWorkgroup) {
-            if (GetDecorationSet(insn->Word(2)).Has(DecorationSet::aliased_bit)) {
-                find_max_block = true;
+        if (insn->StorageClass() != spv::StorageClassWorkgroup) {
+            continue;  // "shared memory" == the Workgroup storage class
+        }
+
+        // Starting in SPIR-V 1.4, only the Workgroup variables listed in the OpEntryPoint interface are counted
+        // https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8678
+        if (spirv_1_4_or_later) {
+            const Instruction& entry_point = entrypoint.entrypoint_insn;
+            uint32_t word = entry_point.GetEntryPointInterfaceStart();
+            const uint32_t total_words = entrypoint.entrypoint_insn.Length();
+            bool in_interface = false;
+            for (; word < total_words; word++) {
+                if (entry_point.Word(word) == insn->ResultId()) {
+                    in_interface = true;
+                    break;
+                }
             }
-
-            const Instruction* type = GetVariablePointerType(*insn);
-
-            // structs might have an offset padding
-            const uint32_t variable_shared_size =
-                (type->Opcode() == spv::OpTypeStruct) ? GetTypeStructInfo(type)->GetSize(*this).size : GetTypeBytesSize(type);
-
-            if (find_max_block) {
-                total_size = std::max(total_size, variable_shared_size);
-            } else {
-                total_size += variable_shared_size;
+            if (!in_interface) {
+                continue;
             }
+        }
+
+        if (GetDecorationSet(insn->Word(2)).Has(DecorationSet::aliased_bit)) {
+            find_max_block = true;
+        }
+
+        const Instruction* type = GetVariablePointerType(*insn);
+
+        // structs might have an offset padding
+        const uint32_t variable_shared_size =
+            (type->Opcode() == spv::OpTypeStruct) ? GetTypeStructInfo(type)->GetSize(*this).size : GetTypeBytesSize(type);
+
+        if (find_max_block) {
+            total_size = std::max(total_size, variable_shared_size);
+        } else {
+            total_size += variable_shared_size;
         }
     }
     return total_size;
@@ -2099,8 +2133,8 @@ VkFormat Module::GetTensorFormat(const spirv::Instruction& type_inst) const {
 
 std::string InterfaceSlot::Describe() const {
     std::ostringstream msg;
-    msg << "Location = " << Location() << " | Component = " << Component() << " | Type = " << string_SpvOpcode(type) << " "
-        << bit_width << " bits";
+    msg << "Location = " << Location() << " | Component = " << Component()
+        << " | Type = " << spv::OpToString(static_cast<spv::Op>(type)) << " " << bit_width << " bits";
     return msg.str();
 }
 
@@ -2210,7 +2244,7 @@ std::string ResourceInterfaceVariable::DescribeDescriptor() const {
 std::string StageInterfaceVariable::Describe() const {
     assert(!is_built_in);
     std::ostringstream ss;
-    ss << "[" << string_SpvStorageClass(storage_class) << " variable";
+    ss << "[" << spv::StorageClassToString(storage_class) << " variable";
 
     if (type_struct_info) {
         // is a struct where each field has it's own location
@@ -2393,7 +2427,8 @@ std::vector<InterfaceSlot> StageInterfaceVariable::GetInterfaceSlots(StageInterf
                     if (padding_components != 0) {
                         component_offset = padding_components * (j / column_components);
                     }
-                    slots.emplace_back(base_location, j + component_offset, numerical_type_opcode, numerical_type_width);
+                    slots.emplace_back(base_location, j + component_offset, numerical_type_opcode, numerical_type_width,
+                                       variable.decorations.flags | (members.decorations ? members.decorations->flags : 0));
                 }
                 base_location++;  // If using, each members starts a new Location
             }
@@ -2437,7 +2472,7 @@ std::vector<InterfaceSlot> StageInterfaceVariable::GetInterfaceSlots(StageInterf
                             component_offset = padding_components * (j / column_components);
                         }
                         slots.emplace_back(location, starting_component + j + component_offset, numerical_type_opcode,
-                                           numerical_type_width);
+                                           numerical_type_width, variable.decorations.flags | member_decoration.flags);
                     }
                 }
             }
@@ -2475,7 +2510,7 @@ std::vector<InterfaceSlot> StageInterfaceVariable::GetInterfaceSlots(StageInterf
                     matrix_offset += (4 - vector_components);  // skip to next Location
                 }
                 slots.emplace_back(location, component + starting_component + matrix_offset, numerical_type_opcode,
-                                   numerical_type_width);
+                                   numerical_type_width, variable.decorations.flags);
             }
         }
     }
@@ -2552,7 +2587,7 @@ bool ResourceInterfaceVariable::IsHeap() const {
     // It is only legal to not have a set/binding for descriptors if they are the heap
     // We might one day want to know which heap it is, and could just check for |ResourceHeapEXT| or |SamplerHeapEXT| but that will
     // for sure require more testing
-    return decorations.set == kInvalidValue || decorations.binding == kInvalidValue;
+    return !(decorations.Has(DecorationBase::descriptor_set_bit) && decorations.Has(DecorationBase::binding_bit));
 }
 
 const Instruction& ResourceInterfaceVariable::FindBaseType(ResourceInterfaceVariable& variable, const Module& module_state) {
@@ -2821,7 +2856,7 @@ ResourceInterfaceVariable::ResourceInterfaceVariable(const Module& module_state,
 
     for (const Instruction* pointer : entrypoint.accessible.access_chains) {
         const spirv::Instruction* base = module_state.FindDef(pointer->Word(3));
-        if (base->Opcode() == spv::OpVariable && type_id == base->Word(1)) {
+        if (base->Opcode() == spv::OpVariable && base->ResultId() == id) {
             const spirv::Instruction* base_pointer = module_state.FindDef(base->Word(1));
             const spirv::Instruction* base_type = module_state.FindDef(base_pointer->Word(3));
             if (base_type->IsArray()) {

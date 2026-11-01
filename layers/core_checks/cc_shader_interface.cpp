@@ -28,6 +28,7 @@
 #include <vulkan/utility/vk_format_utils.h>
 #include <vulkan/vulkan_core.h>
 #include "core_validation.h"
+#include "containers/small_vector.h"
 #include "generated/spirv_grammar_helper.h"
 #include "state_tracker/image_state.h"
 #include "state_tracker/shader_instruction.h"
@@ -478,8 +479,12 @@ bool CoreChecks::ValidatePrimitiveTopology(const spirv::Module& module_state, co
             if (stage_state.entrypoint->execution_mode.Has(spirv::ExecutionModeSet::point_mode_bit)) {
                 tess_output_topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
                 break;
-            } else if (stage == VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT) {
-                tess_output_topology = stage_state.entrypoint->execution_mode.GetTessellationEvalOutputTopology();
+            } else {
+                // The subdivision mode can be declared in either tessellation shader
+                const VkPrimitiveTopology topology = stage_state.entrypoint->execution_mode.GetTessellationEvalOutputTopology();
+                if (topology != VK_PRIMITIVE_TOPOLOGY_MAX_ENUM) {
+                    tess_output_topology = topology;
+                }
             }
         }
     }
@@ -720,17 +725,57 @@ bool CoreChecks::ValidateInterfaceBetweenStages(const ShaderStageState& producer
         std::ostringstream msg;
         msg << producer_entrypoint.Describe() << " Output Block {\n";
         for (size_t i = 0; i < output_built_in_block.size(); i++) {
-            msg << '\t' << i << ": " << string_SpvBuiltIn(output_built_in_block[i]) << '\n';
+            msg << '\t' << i << ": " << spv::BuiltInToString(output_built_in_block[i]) << '\n';
         }
         msg << "}\n";
         msg << consumer_entrypoint.Describe() << " Input Block {\n";
         for (size_t i = 0; i < input_built_in_block.size(); i++) {
-            msg << '\t' << i << ": " << string_SpvBuiltIn(input_built_in_block[i]) << '\n';
+            msg << '\t' << i << ": " << spv::BuiltInToString(input_built_in_block[i]) << '\n';
         }
         msg << "}\n";
         const LogObjectList objlist(producer_module.handle(), consumer_module.handle());
         skip |= LogError("VUID-RuntimeSpirv-OpVariable-08746", objlist, create_info_loc,
                          "(SPIR-V Interface) Mismatch in BuiltIn blocks:\n %s", msg.str().c_str());
+    }
+    return skip;
+}
+
+// https://docs.vulkan.org/spec/latest/chapters/interfaces.html#interfaces-iointerfaces-matching
+bool CoreChecks::ValidateGraphicsLibraryInterpolation(const vvl::Pipeline& pipeline, const ShaderStageState& last_pre_raster,
+                                                      const ShaderStageState& fragment, const Location& create_info_loc) const {
+    bool skip = false;
+    if (phys_dev_ext_props.graphics_pipeline_library_props.graphicsPipelineLibraryIndependentInterpolationDecoration) {
+        return skip;  // the decorations can to be different
+    } else if (!pipeline.pre_raster_state || !pipeline.fragment_shader_state || !last_pre_raster.HasSpirv() ||
+               !fragment.HasSpirv()) {
+        return skip;
+    } else if (&pipeline.pre_raster_state->parent == &pipeline.fragment_shader_state->parent) {
+        return skip;  // Both were compiled in the same library
+    }
+
+    const auto& outputs = last_pre_raster.entrypoint->output_interface_slots;
+    const uint32_t interpolation_mask = spirv::DecorationBase::flat_bit | spirv::DecorationBase::no_perspective_bit;
+    for (const auto& [input_slot, input_var] : fragment.entrypoint->input_interface_slots) {
+        const auto output_it = outputs.find(input_slot);
+        if (output_it == outputs.end()) {
+            continue;
+        }
+        const auto& [output_slot, output_var] = *output_it;
+        if (((output_slot.decoration_flags ^ input_slot.decoration_flags) & interpolation_mask) == 0) {
+            continue;
+        }
+
+        std::ostringstream ss;
+        ss << "(SPIR-V Interface) at Location " << input_slot.Location() << " Component " << input_slot.Component()
+           << ", the Flat or NoPerspective decorations differ between\n";
+        ss << last_pre_raster.entrypoint->Describe() << '\n' << last_pre_raster.spirv_state->DescribeVariable(output_var->id);
+        ss << fragment.entrypoint->Describe() << '\n' << fragment.spirv_state->DescribeVariable(input_var->id);
+        ss << "The pre-rasterization and fragment shaders are in separate graphics pipeline libraries and "
+              "graphicsPipelineLibraryIndependentInterpolationDecoration is VK_FALSE.";
+        const LogObjectList objlist(last_pre_raster.spirv_state->handle(), fragment.spirv_state->handle());
+        skip |= LogError("VUID-RuntimeSpirv-OpVariable-08746", objlist, create_info_loc, "%s", ss.str().c_str());
+
+        break;  // Only need to report the first mismatch
     }
     return skip;
 }
@@ -879,19 +924,34 @@ bool CoreChecks::ValidateDrawDynamicRenderingFsOutputs(const LastBound& last_bou
     vvl::Pipeline* pipeline = last_bound_state.pipeline_state;
 
     struct Attachment {
+        uint32_t location = 0;
         const VkRenderingAttachmentInfo* rendering_attachment_info = nullptr;
         const spirv::StageInterfaceVariable* output = nullptr;
         std::optional<uint32_t> mapped_location = std::nullopt;
     };
-    std::map<uint32_t, Attachment> location_map;
+
+    // Use to use a std::map (order matters here) but per-draw is a hot spot and from dumpping the colorAttachmentCount for various
+    // trace, found 6 or 8 is the most any app ever used
+    small_vector<Attachment, 8> attachments;
+
+    auto find_attachment = [&attachments](uint32_t location) -> Attachment& {
+        for (Attachment& attachment : attachments) {
+            if (attachment.location == location) {
+                return attachment;
+            }
+        }
+        Attachment& attachment = attachments.emplace_back();
+        attachment.location = location;
+        return attachment;
+    };
 
     const size_t color_attachment_count = cb_state.rendering_attachments.color_locations.size();
     for (size_t i = 0; i < color_attachment_count; ++i) {
         uint32_t color_location = cb_state.rendering_attachments.color_locations[i];
         if (color_location != VK_ATTACHMENT_UNUSED) {
-            location_map[color_location].rendering_attachment_info =
-                rp_state.dynamic_rendering_begin_rendering_info.pColorAttachments[i].ptr();
-            location_map[color_location].mapped_location = static_cast<uint32_t>(i);
+            Attachment& attachment = find_attachment(color_location);
+            attachment.rendering_attachment_info = rp_state.dynamic_rendering_begin_rendering_info.pColorAttachments[i].ptr();
+            attachment.mapped_location = static_cast<uint32_t>(i);
         }
     }
 
@@ -908,10 +968,11 @@ bool CoreChecks::ValidateDrawDynamicRenderingFsOutputs(const LastBound& last_bou
         }
         // It is not allowed to have Block Fragment or 64-bit vectors output in Frag shader
         // This means all Locations in slots will be the same
-        location_map[variable->interface_slots[0].Location()].output = variable;
+        find_attachment(variable->interface_slots[0].Location()).output = variable;
     }
 
-    for (const auto& [location, attachment_info] : location_map) {
+    for (const Attachment& attachment_info : attachments) {
+        const uint32_t location = attachment_info.location;
         const bool has_attachment =
             attachment_info.rendering_attachment_info && attachment_info.rendering_attachment_info->imageView != VK_NULL_HANDLE;
         const spirv::StageInterfaceVariable* output = attachment_info.output;
@@ -1083,7 +1144,8 @@ bool CoreChecks::ValidatePipelineTessellationStages(const ShaderStageState& tesc
         skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-pStages-00733", objlist, create_info_loc,
                          "Subdivision specified in tessellation control shader is %s, but subdivision type specified in "
                          "tessellation evaluation shader is %s",
-                         string_SpvExecutionMode(tesc_subdivision), string_SpvExecutionMode(tese_subdivision));
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tesc_subdivision)),
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tese_subdivision)));
     }
     if (tesc_patch_size == spirv::kInvalidValue && tese_patch_size == spirv::kInvalidValue) {
         const LogObjectList objlist(tesc_stage.spirv_state->handle(), tese_stage.spirv_state->handle());
@@ -1103,7 +1165,8 @@ bool CoreChecks::ValidatePipelineTessellationStages(const ShaderStageState& tesc
         skip |= LogError("VUID-VkPipelineShaderStageCreateInfo-stage-00713", device, create_info_loc.dot(Field::pCode),
                          "is using OutputVertices (patch size) %" PRIu32
                          ", which is not between 1 and maxTessellationPatchSize (%" PRIu32 ").",
-                         tesc_patch_size, phys_dev_props.limits.maxTessellationPatchSize);
+                         tesc_patch_size != spirv::kInvalidValue ? tesc_patch_size : tese_patch_size,
+                         phys_dev_props.limits.maxTessellationPatchSize);
     }
 
     return skip;
@@ -1208,6 +1271,10 @@ bool CoreChecks::ValidateGraphicsPipelineShaderState(const vvl::Pipeline& pipeli
             const ShaderStageState& producer = pipeline.stage_states[producer_index];
             const ShaderStageState& consumer = pipeline.stage_states[consumer_index];
             skip |= ValidateInterfaceBetweenStages(producer, consumer, create_info_loc);
+
+            if (pipeline.library_create_info && consumer.GetStage() == VK_SHADER_STAGE_FRAGMENT_BIT) {
+                skip |= ValidateGraphicsLibraryInterpolation(pipeline, producer, consumer, create_info_loc);
+            }
 
             producer_index = consumer_index;
         }

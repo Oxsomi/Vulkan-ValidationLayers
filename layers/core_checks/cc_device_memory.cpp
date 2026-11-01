@@ -107,9 +107,20 @@ bool CoreChecks::ValidateMemoryIsBoundToImage(const LogObjectList& objlist, cons
         // No need to optimize this since the size will only be 3 at most
         const auto& memory_states = image_state.GetBoundMemoryStates();
         if (memory_states.empty()) {
-            result |=
-                LogError(vuid, objlist, loc, "%s used with no memory bound. Memory should be bound by calling vkBindImageMemory().",
-                         FormatHandle(image_state).c_str());
+            const char* metal_hint = "";
+#ifdef VK_USE_PLATFORM_METAL_EXT
+            if (vku::FindStructInPNextChain<VkImportMetalTextureInfoEXT>(image_state.GetPNext())) {
+                metal_hint =
+                    "\nHint: The image was created with VkImportMetalTextureInfoEXT, which the spec says is treated as bound to a "
+                    "VkDeviceMemory, but this VU does not account for that. This is a spec issue "
+                    "(https://github.com/KhronosGroup/Vulkan-Docs/issues/2843), not a validation layer bug. Use "
+                    "VK_EXT_external_memory_metal instead, which imports the MTLTexture as a VkDeviceMemory that can be bound "
+                    "with vkBindImageMemory().";
+            }
+#endif  // VK_USE_PLATFORM_METAL_EXT
+            result |= LogError(vuid, objlist, loc,
+                               "%s used with no memory bound. Memory should be bound by calling vkBindImageMemory().%s",
+                               FormatHandle(image_state).c_str(), metal_hint);
         } else {
             for (const auto& state : memory_states) {
                 result |= VerifyBoundMemoryIsValid(state.get(), objlist, image_state.Handle(), loc, vuid);
@@ -305,6 +316,22 @@ bool CoreChecks::IgnoreAllocationSize(const VkMemoryAllocateInfo& allocate_info)
         }
     }
     return false;
+}
+
+// fd and host pointer imports have their own VUID for this, not just the Win32 one
+static const char* GetImportSupportVuid(const vvl::DeviceMemory& memory) {
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+    if (vku::FindStructInPNextChain<VkImportMemoryWin32HandleInfoKHR>(memory.allocate_info.pNext)) {
+        return "VUID-VkImportMemoryWin32HandleInfoKHR-handleType-09861";
+    }
+#endif
+    if (vku::FindStructInPNextChain<VkImportMemoryFdInfoKHR>(memory.allocate_info.pNext)) {
+        return "VUID-VkImportMemoryFdInfoKHR-handleType-09862";
+    }
+    if (vku::FindStructInPNextChain<VkImportMemoryHostPointerInfoEXT>(memory.allocate_info.pNext)) {
+        return "VUID-VkImportMemoryHostPointerInfoEXT-handleType-01747";
+    }
+    return kVUIDUndefined;
 }
 
 bool CoreChecks::GetExternalMemoryPropertiesBuffer(const vvl::Buffer& buffer, VkExternalMemoryHandleTypeFlagBits handle_type,
@@ -709,6 +736,8 @@ bool CoreChecks::PreCallValidateAllocateMemory(VkDevice device, const VkMemoryAl
             // There is no reasonable way to query all variations of Image/Buffer creation to see what is supported, but if the
             // import has dedicated Image/Buffer, we can at least validate that it has import support
             // https://gitlab.khronos.org/vulkan/vulkan/-/issues/3667
+            // Non-dedicated imports and other handle types (like DMA_BUF) are only caught at bind time, with the VUID of the import
+            // struct used. Strictly these VUIDs only need import support by any one resource type, so that is best effort.
             if (dedicated_image != VK_NULL_HANDLE) {
                 auto dedicated_image_state = Get<vvl::Image>(dedicated_image);
                 if (dedicated_image_state &&
@@ -832,11 +861,12 @@ bool CoreChecks::PreCallValidateAllocateMemory(VkDevice device, const VkMemoryAl
                 VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_KMT_BIT;
 
             if ((import_memory_win32_info->handleType &
-                 (nt_handles_outside_vulkan_api | global_share_handles_outside_vulkan_api)) != 0) {
+                 (nt_handles_outside_vulkan_api | global_share_handles_outside_vulkan_api)) != 0 &&
+                import_memory_win32_info->handle != nullptr) {
                 VkMemoryWin32HandlePropertiesKHR handle_properties = vku::InitStructHelper();
-                DispatchGetMemoryWin32HandlePropertiesKHR(device, import_memory_win32_info->handleType,
-                                                          import_memory_win32_info->handle, &handle_properties);
-                if (((1 << pAllocateInfo->memoryTypeIndex) & handle_properties.memoryTypeBits) == 0) {
+                const VkResult result = DispatchGetMemoryWin32HandlePropertiesKHR(
+                    device, import_memory_win32_info->handleType, import_memory_win32_info->handle, &handle_properties);
+                if (result == VK_SUCCESS && ((1 << pAllocateInfo->memoryTypeIndex) & handle_properties.memoryTypeBits) == 0) {
                     skip |= LogError(
                         "VUID-VkMemoryAllocateInfo-memoryTypeIndex-00645", device, allocate_info_loc.dot(Field::memoryTypeIndex),
                         "is %" PRIu32 " but VkMemoryWin32HandlePropertiesKHR::memoryTypeBits is 0x%" PRIx32 " with handleType %s.",
@@ -1282,7 +1312,7 @@ bool CoreChecks::ValidateBindBufferMemory(VkBuffer buffer, VkDeviceMemory memory
             if (!HasExternalMemoryImportSupport(*buffer_state, mem_info->import_handle_type.value())) {
                 const LogObjectList objlist(buffer, memory);
                 skip |= LogError(
-                    "VUID-VkImportMemoryWin32HandleInfoKHR-handleType-09861", objlist, loc.dot(Field::memory),
+                    GetImportSupportVuid(*mem_info), objlist, loc.dot(Field::memory),
                     "(%s) was imported from handleType %s but VkExternalBufferProperties does not report it as importable.",
                     FormatHandle(memory).c_str(), string_VkExternalMemoryHandleTypeFlagBits(mem_info->import_handle_type.value()));
             }
@@ -1649,11 +1679,20 @@ bool CoreChecks::ValidateMemoryIsMapped(uint32_t mem_range_count, const VkMapped
                              FormatHandle(mem_ranges[i].memory).c_str());
         }
 
+        const uint64_t data_end = (mem_info->mapped_range.size == VK_WHOLE_SIZE)
+                                      ? mem_info->allocate_info.allocationSize
+                                      : (mem_info->mapped_range.offset + mem_info->mapped_range.size);
+
         if (mem_ranges[i].size == VK_WHOLE_SIZE) {
             if (mem_info->mapped_range.offset > mem_ranges[i].offset) {
                 skip |= LogError("VUID-VkMappedMemoryRange-size-00686", mem_ranges[i].memory, memory_range_loc.dot(Field::offset),
                                  "(%" PRIu64 ") is less than the mapped memory offset (%" PRIu64 ") (and size is VK_WHOLE_SIZE).",
                                  mem_ranges[i].offset, mem_info->mapped_range.offset);
+            } else if (mem_info->mapped_range.size != 0 && mem_ranges[i].offset >= data_end) {
+                skip |= LogError("VUID-VkMappedMemoryRange-size-00686", mem_ranges[i].memory, memory_range_loc.dot(Field::offset),
+                                 "(%" PRIu64 ") is not less than the end of the currently mapped range (%" PRIu64
+                                 ") (and size is VK_WHOLE_SIZE).",
+                                 mem_ranges[i].offset, data_end);
             }
         } else {
             if (mem_info->mapped_range.offset > mem_ranges[i].offset) {
@@ -1662,14 +1701,11 @@ bool CoreChecks::ValidateMemoryIsMapped(uint32_t mem_range_count, const VkMapped
                              "(%" PRIu64 ") is less than the mapped memory offset (%" PRIu64 ") (and size is not VK_WHOLE_SIZE).",
                              mem_ranges[i].offset, mem_info->mapped_range.offset);
             }
-            const uint64_t data_end = (mem_info->mapped_range.size == VK_WHOLE_SIZE)
-                                          ? mem_info->allocate_info.allocationSize
-                                          : (mem_info->mapped_range.offset + mem_info->mapped_range.size);
             if ((data_end < (mem_ranges[i].offset + mem_ranges[i].size))) {
                 skip |= LogError("VUID-VkMappedMemoryRange-size-00685", mem_ranges[i].memory, memory_range_loc,
                                  "size (%" PRIu64 ") + offset (%" PRIu64
                                  ") "
-                                 "exceed the Memory Object's upper-bound (%" PRIu64 ").",
+                                 "exceeds the end of the currently mapped range (%" PRIu64 ").",
                                  mem_ranges[i].size, mem_ranges[i].offset, data_end);
             }
         }
@@ -1687,7 +1723,7 @@ bool CoreChecks::ValidateMappedMemoryRangeDeviceLimits(uint32_t mem_range_count,
         const VkDeviceSize size = mem_ranges[i].size;
 
         if (!IsIntegerMultipleOf(offset, atom_size)) {
-            skip |= LogError("VUID-VkMappedMemoryRange-offset-00687", mem_ranges->memory, memory_range_loc.dot(Field::offset),
+            skip |= LogError("VUID-VkMappedMemoryRange-offset-00687", mem_ranges[i].memory, memory_range_loc.dot(Field::offset),
                              "(%" PRIu64 ") is not a multiple of VkPhysicalDeviceLimits::nonCoherentAtomSize (%" PRIu64 ").",
                              offset, atom_size);
         }
@@ -1700,7 +1736,7 @@ bool CoreChecks::ValidateMappedMemoryRangeDeviceLimits(uint32_t mem_range_count,
             const VkDeviceSize mapping_size = mem_info->mapped_range.size;
             const VkDeviceSize mapping_end = ((mapping_size == VK_WHOLE_SIZE) ? allocation_size : mapping_offset + mapping_size);
             if (!IsIntegerMultipleOf(mapping_end, atom_size) && mapping_end != allocation_size) {
-                skip |= LogError("VUID-VkMappedMemoryRange-size-01389", mem_ranges->memory, memory_range_loc.dot(Field::size),
+                skip |= LogError("VUID-VkMappedMemoryRange-size-01389", mem_ranges[i].memory, memory_range_loc.dot(Field::size),
                                  "is VK_WHOLE_SIZE but the mapping is invalid\n1. The offset (%" PRIu64 ") + size (%" PRIu64
                                  ") ends at %" PRIu64
                                  " which is not a multiple of VkPhysicalDeviceLimits::nonCoherentAtomSize (%" PRIu64
@@ -1712,7 +1748,7 @@ bool CoreChecks::ValidateMappedMemoryRangeDeviceLimits(uint32_t mem_range_count,
         } else {
             const VkDeviceSize range_end = size + offset;
             if (range_end != allocation_size && !IsIntegerMultipleOf(size, atom_size)) {
-                skip |= LogError("VUID-VkMappedMemoryRange-size-01390", mem_ranges->memory, memory_range_loc.dot(Field::size),
+                skip |= LogError("VUID-VkMappedMemoryRange-size-01390", mem_ranges[i].memory, memory_range_loc.dot(Field::size),
                                  "(%" PRIu64 ") is not a multiple of VkPhysicalDeviceLimits::nonCoherentAtomSize (%" PRIu64
                                  ")\nThe offset (%" PRIu64 ") + size (%" PRIu64 ") ends at %" PRIu64
                                  " which is also not valid because it doesn't reach the end of the memory allocation size (%" PRIu64
@@ -1851,7 +1887,7 @@ bool CoreChecks::ValidateBindTensorMemoryARM(uint32_t bindInfoCount, const VkBin
             if (!HasExternalMemoryImportSupport(*tensor_state, mem_info->import_handle_type.value())) {
                 const LogObjectList objlist(bind_info.tensor, bind_info.memory);
                 skip |= LogError(
-                    "VUID-VkImportMemoryWin32HandleInfoKHR-handleType-09861", objlist, bind_info_loc.dot(Field::memory),
+                    GetImportSupportVuid(*mem_info), objlist, bind_info_loc.dot(Field::memory),
                     "(%s) was imported from handleType %s but VkExternalTensorProperties does not report it as importable.",
                     FormatHandle(bind_info.memory).c_str(),
                     string_VkExternalMemoryHandleTypeFlagBits(mem_info->import_handle_type.value()));
@@ -2384,7 +2420,7 @@ bool CoreChecks::ValidateBindImageMemoryResource(const VkBindImageMemoryInfo& bi
         // Check if image can be bound to memory imported from specific handle type
         if (!HasExternalMemoryImportSupport(image_state, memory_state.import_handle_type.value())) {
             const LogObjectList objlist(bind_info.image, bind_info.memory);
-            skip |= LogError("VUID-VkImportMemoryWin32HandleInfoKHR-handleType-09861", objlist, loc.dot(Field::memory),
+            skip |= LogError(GetImportSupportVuid(memory_state), objlist, loc.dot(Field::memory),
                              "(%s) was imported from handleType %s but VkExternalImageFormatProperties does not report "
                              "it as importable.",
                              FormatHandle(bind_info.memory).c_str(),

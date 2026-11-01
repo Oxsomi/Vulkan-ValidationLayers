@@ -147,6 +147,31 @@ TEST_F(NegativeCommand, IndexBufferSizeOffset) {
     m_errorMonitor->VerifyFound();
 }
 
+TEST_F(NegativeCommand, IndexBufferSizeOverflow) {
+    RETURN_IF_SKIP(Init());
+    InitRenderTarget();
+    vkt::Buffer index_buffer(*m_device, 64, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+    CreatePipelineHelper pipe(*this);
+    pipe.CreateGraphicsPipeline();
+
+    m_command_buffer.Begin();
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    m_command_buffer.BeginRenderPass(m_renderPassBeginInfo);
+    vk::CmdBindIndexBuffer(m_command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT32);
+
+    m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndexed-robustBufferAccess2-08798");
+    vk::CmdDrawIndexed(m_command_buffer, 32, 1, 0xFFFFFFF0, 0, 0);
+    m_errorMonitor->VerifyFound();
+
+    m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndexed-robustBufferAccess2-08798");
+    vk::CmdDrawIndexed(m_command_buffer, 4, 1, 0x40000000, 0, 0);
+    m_errorMonitor->VerifyFound();
+
+    m_command_buffer.EndRenderPass();
+    m_command_buffer.End();
+}
+
 TEST_F(NegativeCommand, MissingClearAttachment) {
     TEST_DESCRIPTION("Points to a wrong colorAttachment index in a VkClearAttachment structure passed to vkCmdClearAttachments");
     RETURN_IF_SKIP(Init());
@@ -2052,6 +2077,7 @@ TEST_F(NegativeCommand, DrawIndirectCountKHR) {
     m_errorMonitor->VerifyFound();
 
     m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndirectCount-offset-02710");
+    m_errorMonitor->SetAllowedFailureMsg("VUID-vkCmdDrawIndirectCount-maxDrawCount-03111");
     vk::CmdDrawIndirectCountKHR(m_command_buffer, draw_buffer, 1, count_buffer, 0, 1, sizeof(VkDrawIndirectCommand));
     m_errorMonitor->VerifyFound();
 
@@ -2066,6 +2092,10 @@ TEST_F(NegativeCommand, DrawIndirectCountKHR) {
 
     m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndirectCount-stride-03110");
     vk::CmdDrawIndirectCountKHR(m_command_buffer, draw_buffer, 0, count_buffer, 0, 1, 1);
+    m_errorMonitor->VerifyFound();
+
+    m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndirectCount-maxDrawCount-03111");
+    vk::CmdDrawIndirectCountKHR(m_command_buffer, draw_buffer, 4, count_buffer, 0, 1, sizeof(VkDrawIndirectCommand));
     m_errorMonitor->VerifyFound();
 
     m_command_buffer.EndRenderPass();
@@ -2134,6 +2164,7 @@ TEST_F(NegativeCommand, DrawIndexedIndirectCountKHR) {
     m_errorMonitor->VerifyFound();
 
     m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndexedIndirectCount-offset-02710");
+    m_errorMonitor->SetAllowedFailureMsg("VUID-vkCmdDrawIndexedIndirectCount-maxDrawCount-03143");
     vk::CmdDrawIndexedIndirectCountKHR(m_command_buffer, draw_buffer, 1, count_buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
     m_errorMonitor->VerifyFound();
 
@@ -2148,6 +2179,10 @@ TEST_F(NegativeCommand, DrawIndexedIndirectCountKHR) {
 
     m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndexedIndirectCount-stride-03142");
     vk::CmdDrawIndexedIndirectCountKHR(m_command_buffer, draw_buffer, 0, count_buffer, 0, 1, 1);
+    m_errorMonitor->VerifyFound();
+
+    m_errorMonitor->SetDesiredError("VUID-vkCmdDrawIndexedIndirectCount-maxDrawCount-03143");
+    vk::CmdDrawIndexedIndirectCountKHR(m_command_buffer, draw_buffer, 4, count_buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
     m_errorMonitor->VerifyFound();
 
     m_command_buffer.EndRenderPass();
@@ -3226,8 +3261,6 @@ TEST_F(NegativeCommand, ClearDepthStencilWithAspect) {
     // Element of pRanges.aspect includes VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_USAGE_TRANSFER_DST_BIT not included in the
     // VkImageCreateInfo::usage used to create image
     m_errorMonitor->SetDesiredError("VUID-vkCmdClearDepthStencilImage-pRanges-02660");
-    // ... since VK_IMAGE_USAGE_TRANSFER_DST_BIT not included in the VkImageCreateInfo::usage used to create image
-    m_errorMonitor->SetDesiredError("VUID-vkCmdClearDepthStencilImage-pRanges-02659");
     vk::CmdClearDepthStencilImage(m_command_buffer, image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &range);
     m_errorMonitor->VerifyFound();
 
@@ -3266,8 +3299,6 @@ TEST_F(NegativeCommand, ClearDepthStencilWithAspectSeparate) {
     // Element of pRanges.aspect includes VK_IMAGE_ASPECT_STENCIL_BIT, and image was created with separate stencil usage,
     // VK_IMAGE_USAGE_TRANSFER_DST_BIT not included in the VkImageStencilUsageCreateInfo::stencilUsage used to create image
     m_errorMonitor->SetDesiredError("VUID-vkCmdClearDepthStencilImage-pRanges-02658");
-    // ... since VK_IMAGE_USAGE_TRANSFER_DST_BIT not included in the VkImageCreateInfo::usage used to create image
-    m_errorMonitor->SetDesiredError("VUID-vkCmdClearDepthStencilImage-pRanges-02659");
     vk::CmdClearDepthStencilImage(m_command_buffer, image, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &range);
     m_errorMonitor->VerifyFound();
 
@@ -3403,7 +3434,6 @@ TEST_F(NegativeCommand, ClearDepthStencilImage) {
     // need to handle since an element of pRanges includes VK_IMAGE_ASPECT_DEPTH_BIT without VkImageCreateInfo::usage having
     // VK_IMAGE_USAGE_TRANSFER_DST_BIT being set
     m_errorMonitor->SetDesiredError("VUID-vkCmdClearDepthStencilImage-pRanges-02660");
-    m_errorMonitor->SetDesiredError("VUID-vkCmdClearDepthStencilImage-pRanges-02659");
     vk::CmdClearDepthStencilImage(m_command_buffer, dst_image_bad_usage, VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &range);
     m_errorMonitor->VerifyFound();
 

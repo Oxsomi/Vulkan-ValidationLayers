@@ -25,6 +25,7 @@
 #include "sync/sync_access_context.h"
 #include "sync/sync_command_buffer.h"
 #include "sync/sync_error_messages.h"
+#include "sync/sync_queue_command.h"
 #include "sync/sync_stats.h"
 #include "sync/sync_submit.h"
 #include "containers/limits.h"
@@ -71,7 +72,11 @@ class SyncValidator : public vvl::DeviceProxy {
 
     // Host synchronization (vkWaitForFences, vkWaitSemaphores)
     vvl::unordered_map<VkFence, FenceHostSyncPoint> waitable_fences_;
-    vvl::unordered_map<VkSemaphore, std::deque<TimelineHostSyncPoint>> host_waitable_semaphores_;
+    vvl::unordered_map<VkSemaphore, TimelineHostSyncState> host_waitable_semaphores_;
+
+    // Run validation after a GPU synchronization point
+    const bool retire_mode_ = false;  // placeholder
+    QueueCommandStorage queue_commands_;
 
     uint32_t debug_command_number = vvl::kNoIndex32;
     uint32_t debug_reset_count = 1;
@@ -108,6 +113,9 @@ class SyncValidator : public vvl::DeviceProxy {
     void WaitForSemaphore(VkSemaphore semaphore, uint64_t value);
 
     void UpdateSyncImageMemoryBindState(uint32_t count, const VkBindImageMemoryInfo* infos);
+
+    bool ProcessQueueCommand(QueueCommand&& command);
+    void ExecuteQueueCommands();
 
     QueueId GetQueueId(VkQueue queue) const;
     QueueState& GetQueueState(QueueId queue_id);
@@ -528,7 +536,6 @@ class SyncValidator : public vvl::DeviceProxy {
                                      uint64_t timeout, const RecordObject& record_obj) override;
     bool PreCallValidateSignalSemaphore(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo,
                                         const ErrorObject& error_obj) const override;
-    bool ProcessSignalSemaphore(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo);
     bool PreCallValidateSignalSemaphoreKHR(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo,
                                            const ErrorObject& error_obj) const override;
     void PostCallRecordWaitSemaphores(VkDevice device, const VkSemaphoreWaitInfo* pWaitInfo, uint64_t timeout,

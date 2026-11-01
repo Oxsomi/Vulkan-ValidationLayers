@@ -5,7 +5,7 @@
         "prefix": "vvl",
         "type": "GLOBAL",
         "library_path": "@JSON_LIBRARY_PATH@",
-        "api_version": "1.4.365",
+        "api_version": "1.4.367",
         "implementation_version": "1",
         "description": "Khronos Validation Layer",
         "introduction": "The main, comprehensive Khronos validation layer.\n\nVulkan is an Explicit API, enabling direct control over how GPUs actually work. By design, minimal error checking is done inside a Vulkan driver. Applications have full control and responsibility for correct operation. Any errors in how Vulkan is used can result in a crash. \n\nThe Khronos Validation Layer can be enabled to assist development by enabling developers to verify their applications correctly use the Vulkan API.",
@@ -62,6 +62,11 @@
                 "entrypoints": [
                     "vkGetPhysicalDeviceToolPropertiesEXT"
                 ]
+            },
+            {
+                "name": "VK_EXT_frame_boundary",
+                "spev_version": "1",
+                "entrypoints": []
             }
         ],
         "features": {
@@ -1069,7 +1074,7 @@
                                         {
                                             "key": "gpuav_select_instrumented_shaders",
                                             "label": "Selective Instrument Shaders",
-                                            "description": "When turned on, shaders are NOT instrumented unless selected. This can be done by:\n- passing a VkValidationFeaturesEXT struct in the pNext of VkShaderModuleCreateInfo/VkPipelineShaderStageCreateInfo/vkCreateShadersEXT pNext\n- using a regex matching a shader/pipeline debug name.\n- Providing a CDL dump file to parse the debug names from it.",
+                                            "description": "When turned on, shaders are NOT instrumented unless selected. This can be done by:\n- passing a VkValidationFeaturesEXT struct in the pNext of VkShaderModuleCreateInfo/VkPipelineShaderStageCreateInfo/vkCreateShadersEXT pNext\n- using a pattern matching a shader/pipeline debug name.\n- Providing a CDL dump file to parse the debug names from it.",
                                             "url": "https://github.com/KhronosGroup/Vulkan-ValidationLayers/blob/main/docs/gpu_av_scoped.md",
                                             "type": "BOOL",
                                             "default": false,
@@ -1082,8 +1087,8 @@
                                             "settings": [
                                                 {
                                                     "key": "gpuav_shaders_to_instrument",
-                                                    "label": "Shader/pipeline name regexes",
-                                                    "description": "Any shader or pipeline library debug name (set with vkSetDebugUtilsObjectNameEXT) fully matching any listed regular expression will be instrumented when creating pipelines with those shaders or libraries. Regex grammar: Modified ECMAScript. No support for shader objects yet. Warning: instrumentation being performed at final pipeline creation time, if shaders modules have already been destroyed at this step (possible when using pipeline libraries), they won't be found by this regex selection system. In this case, consider naming pipeline libraries instead.",
+                                                    "label": "Shader/pipeline name patterns",
+                                                    "description": "Any shader or pipeline library debug name (set with vkSetDebugUtilsObjectNameEXT) fully matching any listed pattern will be instrumented when creating pipelines with those shaders or libraries. In a pattern, '*' matches any sequence of characters (including none), every other character is matched literally. For instance `foo` will only match for `foo`, `foo*` with every name starting with `foo`. Warning: instrumentation being performed at final pipeline creation time, if shaders modules have already been destroyed at this step (possible when using pipeline libraries), they won't be found by this name selection system. In this case, consider naming pipeline libraries instead.",
                                                     "type": "LIST",
                                                     "default": [],
                                                     "dependence": {

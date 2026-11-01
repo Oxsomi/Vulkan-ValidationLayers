@@ -3924,20 +3924,6 @@ struct CreateRenderPassHelper {
     // Capture the current input and color attachements, which can then be modified
     void AddInputColorSubpassDescription() { subpass_description_store.emplace_back(input_attachments, color_attachments); }
 
-    // Create a subpass description with all the attachments preserved
-    void AddPreserveInputColorSubpassDescription() {
-        std::vector<uint32_t> preserve;
-        preserve.reserve(input_attachments.size() + color_attachments.size());
-        for (const auto& att : input_attachments) {
-            preserve.push_back(att.attachment);
-        }
-        for (const auto& att : color_attachments) {
-            preserve.push_back(att.attachment);
-        }
-        subpass_description_store.emplace_back();
-        subpass_description_store.back().SetPreserve(preserve);
-    }
-
     // This is the default for a single subpass renderpass, don't call if you want to change that
     void InitSubpassDescription() {
         if (subpass_description_store.empty()) {
@@ -4416,8 +4402,6 @@ TEST_F(NegativeSyncVal, RenderPassAsyncHazard) {
 
     const VkAttachmentReference input_ref{0u, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 
-    std::array<std::array<uint32_t, 2>, kNumImages - 1> preserve_subpass{{{2, 3}, {1, 3}, {1, 2}}};
-
     std::array<VkSubpassDescription, kNumImages> subpasses{};
 
     subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -4432,8 +4416,6 @@ TEST_F(NegativeSyncVal, RenderPassAsyncHazard) {
         subpasses[i].pInputAttachments = &input_ref;
         subpasses[i].colorAttachmentCount = 1;
         subpasses[i].pColorAttachments = &color_refs[i];
-        subpasses[i].preserveAttachmentCount = preserve_subpass[i - 1].size();
-        subpasses[i].pPreserveAttachments = preserve_subpass[i - 1].data();
     }
 
     VkRenderPassCreateInfo renderpass_info = vku::InitStructHelper();
@@ -5987,7 +5969,7 @@ TEST_F(NegativeSyncVal, QSRenderPass) {
 
     // Two subpasses to ensure that the "next subpass" error checks work
     rp_helper2.InitAttachmentArrays();
-    rp_helper2.AddPreserveInputColorSubpassDescription();
+    rp_helper2.AddSubpassDescription({}, {});
     rp_helper2.AddInputColorSubpassDescription();
 
     rp_helper2.InitRenderPass();
@@ -6830,114 +6812,6 @@ TEST_F(NegativeSyncVal, CmdDispatchBase) {
     m_command_buffer.End();
 }
 
-TEST_F(NegativeSyncVal, ExternalDependencyDoesNotSyncLayoutTransition) {
-    // Simplified version of scenario from https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/9903
-    TEST_DESCRIPTION("The last use of attachment is in subpass 0 but external dependency synchronizes subpass 1");
-    RETURN_IF_SKIP(InitSyncVal());
-
-    const uint32_t w = 128;
-    const uint32_t h = 128;
-
-    vkt::Image image(*m_device, w, h, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-    vkt::ImageView image_view = image.CreateView();
-
-    // Configure render pass with subpass dependencies
-    VkAttachmentDescription attachment = {};
-    attachment.format = VK_FORMAT_B8G8R8A8_UNORM;
-    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    const VkAttachmentReference attachment_reference = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-    const uint32_t preserve_attachment = 0;
-
-    VkSubpassDescription subpass0{};
-    subpass0.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass0.colorAttachmentCount = 1;
-    subpass0.pColorAttachments = &attachment_reference;
-
-    VkSubpassDescription subpass1{};
-    subpass1.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass1.preserveAttachmentCount = 1;
-    subpass1.pPreserveAttachments = &preserve_attachment;
-
-    const VkSubpassDescription subpasses[2] = {subpass0, subpass1};
-
-    VkSubpassDependency subpass_dependency0{};
-    subpass_dependency0.srcSubpass = 0;
-    subpass_dependency0.dstSubpass = 1;
-    subpass_dependency0.srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    subpass_dependency0.dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    subpass_dependency0.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    subpass_dependency0.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-
-    VkSubpassDependency subpass_dependency1{};
-    // Define external dependency with the last subpass (1), but the attachment is used only by the first subpass (0).
-    // This subpass dependency won't participate in the attachment final layout transition and won't be able to
-    // protect compute accesses. Instead, implicit external subpass dependency from subpass 0 will be used, which does
-    // not protect any accesses on the destination (compute) side.
-    subpass_dependency1.srcSubpass = 1;
-
-    subpass_dependency1.dstSubpass = VK_SUBPASS_EXTERNAL;
-    subpass_dependency1.srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    subpass_dependency1.dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    subpass_dependency1.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    subpass_dependency1.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-
-    VkSubpassDependency subpass_dependencies[2] = {subpass_dependency0, subpass_dependency1};
-
-    VkRenderPassCreateInfo rpci = vku::InitStructHelper();
-    rpci.attachmentCount = 1;
-    rpci.pAttachments = &attachment;
-    rpci.subpassCount = 2;
-    rpci.pSubpasses = subpasses;
-    rpci.dependencyCount = 2;
-    rpci.pDependencies = subpass_dependencies;
-
-    const vkt::RenderPass rp(*m_device, rpci);
-    const vkt::Framebuffer fb(*m_device, rp, 1, &image_view.handle(), w, h);
-
-    CreatePipelineHelper gfx_pipe(*this);
-    gfx_pipe.gp_ci_.renderPass = rp;
-    gfx_pipe.CreateGraphicsPipeline();
-
-    // Configure compute to read attachment image
-    vkt::Sampler sampler(*m_device, SafeSaneSamplerCreateInfo());
-    OneOffDescriptorSet descriptor_set(m_device, {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT}});
-    descriptor_set.WriteDescriptorImageInfo(0, image_view, sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    descriptor_set.UpdateDescriptorSets();
-    const char* cs_source = R"glsl(
-        #version 450
-        layout(set=0, binding=0) uniform sampler2D color_image;
-        void main(){
-            vec4 color_data = texture(color_image, vec2(0));
-        }
-    )glsl";
-    CreateComputePipelineHelper cs_pipe(*this);
-    cs_pipe.cs_ = VkShaderObj(*m_device, cs_source, VK_SHADER_STAGE_COMPUTE_BIT);
-    cs_pipe.pipeline_layout_ = vkt::PipelineLayout(*m_device, {&descriptor_set.layout_});
-    cs_pipe.CreateComputePipeline();
-
-    m_command_buffer.Begin();
-    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, gfx_pipe);
-    m_command_buffer.BeginRenderPass(rp, fb, w, h);
-    m_command_buffer.NextSubpass();
-    m_command_buffer.EndRenderPass();
-
-    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cs_pipe);
-    vk::CmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, cs_pipe.pipeline_layout_, 0, 1,
-                              &descriptor_set.set_, 0, nullptr);
-    m_errorMonitor->SetDesiredErrorRegex("SYNC-HAZARD-READ-AFTER-WRITE", "previously written during an image layout transition");
-    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
-    m_errorMonitor->VerifyFound();
-    m_command_buffer.End();
-}
-
 TEST_F(NegativeSyncVal, BadDestroy) {
     TEST_DESCRIPTION(
         "In PreCallRecordDestroyDevice, make sure CommandBufferSubState is destroyed before destroying device state and validation "
@@ -7394,6 +7268,53 @@ TEST_F(NegativeSyncVal, RacingHazardBetweenLayoutTransitions) {
     queue->Submit2(cb_next_transition);
     m_errorMonitor->VerifyFound();
 
+    m_device->Wait();
+}
+
+TEST_F(NegativeSyncVal, RacingHazardBetweenLayoutTransitions2) {
+    TEST_DESCRIPTION("Layout transition race between unsynchronized queues");
+    all_queue_count_ = true;
+    SetTargetApiVersion(VK_API_VERSION_1_3);
+    AddRequiredFeature(vkt::Feature::synchronization2);
+    RETURN_IF_SKIP(InitSyncVal());
+
+    auto [queue, queue2] = GetTwoQueuesFromSameFamily(m_device->QueuesWithComputeCapability());
+    if (!queue) {
+        GTEST_SKIP() << "Test requires two queues with compute capabilities from the same queue family";
+    }
+    vkt::CommandPool command_pool(*m_device, queue->family_index);
+    vkt::CommandBuffer cb0(*m_device, command_pool);
+    vkt::CommandBuffer cb1(*m_device, command_pool);
+
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    vkt::Image image(*m_device, 32, 32, VK_FORMAT_R8G8B8A8_UNORM, usage);
+
+    VkImageMemoryBarrier2 transition0 = vku::InitStructHelper();
+    transition0.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    transition0.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    transition0.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    transition0.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    transition0.image = image;
+
+    VkImageMemoryBarrier2 transition1 = vku::InitStructHelper();
+    transition1.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    transition1.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    transition1.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    transition1.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    transition1.image = image;
+
+    cb0.Begin();
+    cb0.Barrier(transition0);
+    cb0.End();
+
+    cb1.Begin();
+    cb1.Barrier(transition1);
+    cb1.End();
+
+    queue->Submit2(cb0);
+    m_errorMonitor->SetDesiredError("SYNC-HAZARD-WRITE-RACING-WRITE");
+    queue2->Submit2(cb1);
+    m_errorMonitor->VerifyFound();
     m_device->Wait();
 }
 

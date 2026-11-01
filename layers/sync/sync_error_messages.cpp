@@ -421,7 +421,8 @@ std::string ErrorMessages::RenderPassStoreOpError(const SyncEnvironment& env, co
 
 std::string ErrorMessages::RenderPassLayoutTransitionError(const SyncEnvironment& env, const HazardResult& hazard,
                                                            const ErrorReporter& reporter, const std::string& resource_description,
-                                                           VkImageLayout old_layout, VkImageLayout new_layout) const {
+                                                           VkImageLayout old_layout, VkImageLayout new_layout,
+                                                           bool external_dependencies_miss_initial_transition) const {
     const char* old_layout_str = string_VkImageLayout(old_layout);
     const char* new_layout_str = string_VkImageLayout(new_layout);
 
@@ -431,6 +432,11 @@ std::string ErrorMessages::RenderPassLayoutTransitionError(const SyncEnvironment
     additional_info.properties.Add(kPropertyOldLayout, old_layout_str);
     additional_info.properties.Add(kPropertyNewLayout, new_layout_str);
     additional_info.access_action = "performs image layout transition";
+    if (hazard.PriorQueue() == env.queue_id && external_dependencies_miss_initial_transition) {
+        additional_info.message_end_text =
+            "\nHint: None of the explicit dependencies from VK_SUBPASS_EXTERNAL targets a subpass that uses this attachment, "
+            "so they do not synchronize its initial layout transition. Check their dstSubpass.";
+    }
     return Error(env, hazard, command, resource_description, "RenderPassLayoutTransitionError", additional_info);
 }
 
@@ -477,24 +483,49 @@ std::string ErrorMessages::RenderPassFinalLayoutTransitionVsStoreOrResolveError(
                  additional_info);
 }
 
+static void FormatImageBarrier(std::ostringstream& ss, const SyncImageBarrier& barrier) {
+    const VkPipelineStageFlags2 src_stage_mask = barrier.barrier.src_exec_scope.stage_mask;
+    const VkPipelineStageFlags2 dst_stage_mask = barrier.barrier.dst_exec_scope.stage_mask;
+    const VkAccessFlags2 src_access_mask = barrier.barrier.original_src_access;
+    const VkAccessFlags2 dst_access_mask = barrier.barrier.original_dst_access;
+
+    ss << "\npImageMemoryBarriers[" << barrier.barrier_index << "]: {\n";
+    ss << "  srcStageMask = " << (src_stage_mask ? string_VkPipelineStageFlags2(src_stage_mask) : "VK_PIPELINE_STAGE_2_NONE")
+       << ",\n";
+    ss << "  srcAccessMask = " << (src_access_mask ? string_VkAccessFlags2(src_access_mask) : "VK_ACCESS_2_NONE") << ",\n";
+    ss << "  dstStageMask = " << (dst_stage_mask ? string_VkPipelineStageFlags2(dst_stage_mask) : "VK_PIPELINE_STAGE_2_NONE")
+       << ",\n";
+    ss << "  dstAccessMask = " << (dst_access_mask ? string_VkAccessFlags2(dst_access_mask) : "VK_ACCESS_2_NONE") << ",\n";
+    ss << "  oldLayout = " << string_VkImageLayout(barrier.old_layout) << ",\n";
+    ss << "  newLayout = " << string_VkImageLayout(barrier.new_layout) << ",\n";
+    ss << "  subresourceRange = {" << string_VkImageSubresourceRange(barrier.subresource_range) << "}\n";
+    ss << "}\n";
+}
+
 std::string ErrorMessages::ImageBarrierError(const SyncEnvironment& env, const HazardResult& hazard, const ErrorReporter& reporter,
                                              const std::string& resource_description, const SyncImageBarrier& barrier) const {
     AdditionalMessageInfo additional_info;
     const vvl::Func command = AddReplayInfo(env, hazard, reporter, additional_info);
-    // Keep ImageBarrierError for event waits during replay for message-type compatibility.
+    // Keep ImageBarrierError for event waits during replay for message-type compatibility
     if (IsValueIn(command, {vvl::Func::vkCmdWaitEvents, vvl::Func::vkCmdWaitEvents2, vvl::Func::vkCmdWaitEvents2KHR})) {
         additional_info.message_type_override = nullptr;
     }
 
     additional_info.access_action = "performs image layout transition on the";
 
+    const SyncImageBarrier* prior_barrier = nullptr;
+    if (hazard.State().prior_access_index == SYNC_IMAGE_LAYOUT_TRANSITION && hazard.PriorTag() != kInvalidTag) {
+        prior_barrier = env.usage_info_provider.GetResourceUsageInfo(hazard.PriorTagEx()).image_barrier;
+    }
     std::ostringstream ss;
-    ss << "\npImageMemoryBarriers[" << barrier.barrier_index << "]: {\n";
-    ss << "  srcStageMask = " << string_VkPipelineStageFlags2(barrier.barrier.src_exec_scope.stage_mask) << ",\n";
-    ss << "  srcAccessMask = " << string_VkAccessFlags2(barrier.barrier.original_src_access) << ",\n";
-    ss << "  dstStageMask = " << string_VkPipelineStageFlags2(barrier.barrier.dst_exec_scope.stage_mask) << ",\n";
-    ss << "  dstAccessMask = " << string_VkAccessFlags2(barrier.barrier.original_dst_access) << ",\n";
-    ss << "}\n";
+    if (prior_barrier) {
+        ss << "\nBarrier for current layout transition:";
+    }
+    FormatImageBarrier(ss, barrier);
+    if (prior_barrier) {
+        ss << "\nBarrier for prior layout transition:";
+        FormatImageBarrier(ss, *prior_barrier);
+    }
     additional_info.message_end_text += ss.str();
 
     return Error(env, hazard, command, resource_description, "ImageBarrierError", additional_info);

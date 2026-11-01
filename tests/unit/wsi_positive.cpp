@@ -2363,8 +2363,9 @@ TEST_F(PositiveWsi, OldSwapchainFromAnotherSurface) {
     swapchain_ci.presentMode = m_surface_non_shared_present_mode;
     vkt::Swapchain swapchain1(*m_device, swapchain_ci);
 
+    // A different VkSurfaceKHR, but from the same native window
     vkt::Surface surface2{};
-    VkResult result = CreateSurface(m_surface_context, surface2);
+    VkResult result = CreateSurfaceFromSameWindow(m_surface_context, surface2);
     if (result != VK_SUCCESS) {
         GTEST_SKIP() << "Failed to create surface.";
     }
@@ -2541,7 +2542,7 @@ TEST_F(PositiveWsi, SignalPresentSemaphoreAfterFenceWait) {
 }
 
 TEST_F(PositiveWsi, SignalPresentSemaphoreAfterQueueWait) {
-    TEST_DESCRIPTION("Signal present wait semaphore after waiting on device queue. Only works for pre-swapchain-maintenance1");
+    TEST_DESCRIPTION("Signal present wait semaphore after waiting on device queue without swapchain-maintenance1");
     AddSurfaceExtension();
     RETURN_IF_SKIP(Init());
     RETURN_IF_SKIP(InitSwapchain());
@@ -2549,6 +2550,31 @@ TEST_F(PositiveWsi, SignalPresentSemaphoreAfterQueueWait) {
 
     vkt::Semaphore acquire_semaphore(*m_device);
     uint32_t image_index = m_swapchain.AcquireNextImage(acquire_semaphore, kWaitTimeout);
+    m_command_buffer.Begin();
+    m_command_buffer.TransitionLayout(swapchain_images[image_index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    m_command_buffer.End();
+
+    vkt::Semaphore present_semaphore(*m_device);
+    m_default_queue->Submit(m_command_buffer, vkt::Wait(acquire_semaphore), vkt::Signal(present_semaphore));
+    m_default_queue->Present(m_swapchain, image_index, present_semaphore);
+
+    m_default_queue->Wait();
+    m_default_queue->Submit(vkt::no_cmd, vkt::Signal(present_semaphore));
+    m_default_queue->Wait();
+}
+
+TEST_F(PositiveWsi, SignalPresentSemaphoreAfterQueueWait2) {
+    TEST_DESCRIPTION("Signal present wait semaphore after waiting on device queue with swapchain-maintenance1");
+    AddSurfaceExtension();
+    AddRequiredExtensions(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::swapchainMaintenance1);
+    RETURN_IF_SKIP(Init());
+    RETURN_IF_SKIP(InitSwapchain());
+    const auto swapchain_images = m_swapchain.GetImages();
+
+    vkt::Semaphore acquire_semaphore(*m_device);
+    uint32_t image_index = m_swapchain.AcquireNextImage(acquire_semaphore, kWaitTimeout);
+
     m_command_buffer.Begin();
     m_command_buffer.TransitionLayout(swapchain_images[image_index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     m_command_buffer.End();
@@ -4021,4 +4047,71 @@ TEST_F(PositiveWsi, NullPresentRegionRectangles) {
     present_regions.pRegions = &present_region;
     m_default_queue->Present(m_swapchain, image_index, vkt::no_semaphore, &present_regions);
     m_default_queue->Wait();
+}
+
+TEST_F(PositiveWsi, MSRTSSwapchainImage) {
+    SetTargetApiVersion(VK_API_VERSION_1_3);
+    AddSurfaceExtension();
+    AddRequiredExtensions(VK_EXT_MULTISAMPLED_RENDER_TO_SWAPCHAIN_EXTENSION_NAME);
+    AddRequiredExtensions(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::multisampledRenderToSwapchain);
+    AddRequiredFeature(vkt::Feature::multisampledRenderToSingleSampled);
+    AddRequiredFeature(vkt::Feature::dynamicRendering);
+    RETURN_IF_SKIP(Init());
+    RETURN_IF_SKIP(InitSurface());
+    InitSwapchainInfo();
+
+    VkPhysicalDeviceSurfaceInfo2KHR surface_info = vku::InitStructHelper();
+    surface_info.surface = m_surface;
+    VkSwapchainFlagsSurfaceCapabilitiesEXT swapchain_flags = vku::InitStructHelper();
+    VkSurfaceCapabilities2KHR surface_capabilities = vku::InitStructHelper(&swapchain_flags);
+    vk::GetPhysicalDeviceSurfaceCapabilities2KHR(gpu_, &surface_info, &surface_capabilities);
+
+    if ((swapchain_flags.swapchainSupportedFlags & VK_SWAPCHAIN_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT) == 0) {
+        GTEST_SKIP() << "Surface doesn't support VK_SWAPCHAIN_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT";
+    }
+
+    const SurfaceInformation info = GetSwapchainInfo(m_surface);
+    VkSwapchainCreateInfoKHR swapchain_ci = GetDefaultSwapchainCreateInfo(m_surface, info, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    swapchain_ci.flags = VK_SWAPCHAIN_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
+
+    VkImageFormatProperties format_props;
+    vk::GetPhysicalDeviceImageFormatProperties(gpu_, swapchain_ci.imageFormat, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL,
+                                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                               VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT, &format_props);
+    if ((format_props.sampleCounts & VK_SAMPLE_COUNT_4_BIT) == 0) {
+        GTEST_SKIP() << "Swapchain format doesn't support 4 samples";
+    }
+
+    vkt::Swapchain swapchain(*m_device, swapchain_ci);
+    const auto swapchain_images = swapchain.GetImages();
+
+    VkImageViewCreateInfo ivci = vku::InitStructHelper();
+    ivci.image = swapchain_images[0];
+    ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivci.format = swapchain_ci.imageFormat;
+    ivci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkt::ImageView view(*m_device, ivci);
+
+    VkMultisampledRenderToSingleSampledInfoEXT ms_render_to_ss = vku::InitStructHelper();
+    ms_render_to_ss.multisampledRenderToSingleSampledEnable = VK_TRUE;
+    ms_render_to_ss.rasterizationSamples = VK_SAMPLE_COUNT_4_BIT;
+
+    VkRenderingAttachmentInfo color_attachment = vku::InitStructHelper();
+    color_attachment.imageView = view;
+    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color_attachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo rendering_info = vku::InitStructHelper(&ms_render_to_ss);
+    rendering_info.renderArea = {{0, 0}, swapchain_ci.imageExtent};
+    rendering_info.layerCount = 1;
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachments = &color_attachment;
+
+    m_command_buffer.Begin();
+    m_command_buffer.BeginRendering(rendering_info);
+    m_command_buffer.EndRendering();
+    m_command_buffer.End();
 }

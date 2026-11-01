@@ -298,10 +298,12 @@ bool DescriptorValidator::ValidateDescriptor(const spirv::ResourceInterfaceVaria
     auto buffer_node = descriptor.GetBufferState();
     if ((!buffer_node && !dev_proxy.enabled_features.nullDescriptor) || (buffer_node && buffer_node->Destroyed())) {
         const LogObjectList objlist(this->objlist, descriptor_set.Handle());
-        skip |= LogError(CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
-                         "the %s is using buffer %s that is invalid or has been destroyed.%s",
-                         DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(buffer).c_str(),
-                         DescribeInstruction().c_str());
+        skip |= LogError(
+            CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
+            "the %s is using buffer %s that is invalid or has been destroyed.%s%s",
+            DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(buffer).c_str(),
+            buffer == VK_NULL_HANDLE ? "\nHint: VK_NULL_HANDLE can be allowed if the nullDescriptor feature is enabled." : "",
+            DescribeInstruction().c_str());
         // early return if no valid
         return skip;
     }
@@ -656,7 +658,7 @@ bool DescriptorValidator::ValidateSampledImageDescriptor(const spirv::ResourceIn
         const LogObjectList objlist(this->objlist, descriptor_set.Handle(), image_view_state.VkHandle());
         std::ostringstream ss;
         ss << "the " << DescribeDescriptor(resource_variable, index, descriptor_type) << " VkImageViewType is "
-           << string_VkImageViewType(image_view_ci.viewType) << " but the OpTypeImage has (Dim = " << string_SpvDim(dim)
+           << string_VkImageViewType(image_view_ci.viewType) << " but the OpTypeImage has (Dim = " << spv::DimToString(dim)
            << ") and (Arrayed = " << is_image_array << ").\nEither fix in the shader or update the VkImageViewType to "
            << SuggestImageViewType(dim, is_image_array);
         if (((image_view_ci.viewType == VK_IMAGE_VIEW_TYPE_1D || image_view_ci.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY) &&
@@ -893,7 +895,7 @@ bool DescriptorValidator::ValidateImageSamplerDescriptor(const spirv::ResourceIn
             }
         }
 
-        if (IsExtEnabled(dev_proxy.extensions.vk_img_filter_cubic)) {
+        if (IsExtEnabled(dev_proxy.extensions.vk_img_filter_cubic) && !IsExtEnabled(dev_proxy.extensions.vk_ext_filter_cubic)) {
             if (image_view_state.create_info.viewType == VK_IMAGE_VIEW_TYPE_3D ||
                 image_view_state.create_info.viewType == VK_IMAGE_VIEW_TYPE_CUBE ||
                 image_view_state.create_info.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
@@ -901,7 +903,8 @@ bool DescriptorValidator::ValidateImageSamplerDescriptor(const spirv::ResourceIn
                                             image_view_state.Handle());
                 skip |= LogError(CreateActionVuid(loc.Get().function, vvl::ActionVUID::FILTER_CUBIC_02693), objlist, loc.Get(),
                                  "the %s has %s which is set to use VK_FILTER_CUBIC_EXT while the VK_IMG_filter_cubic "
-                                 "extension is enabled, but image view (%s) has an invalid imageViewType (%s).%s",
+                                 "extension is enabled, but image view (%s) has an invalid imageViewType (%s).\nHint: This can be "
+                                 "allowed if VK_EXT_filter_cubic is enabled.%s",
                                  DescribeDescriptor(resource_variable, index, descriptor_type).c_str(),
                                  FormatHandle(sampler_state.Handle()).c_str(), FormatHandle(image_view_state.Handle()).c_str(),
                                  string_VkImageViewType(image_view_state.create_info.viewType), DescribeInstruction().c_str());
@@ -1118,10 +1121,12 @@ bool DescriptorValidator::ValidateDescriptor(const spirv::ResourceInterfaceVaria
         // Image view must have been destroyed since initial update. Could potentially flag the descriptor
         //  as "invalid" (updated = false) at DestroyImageView() time and detect this error at bind time
         const LogObjectList objlist(this->objlist, descriptor_set.Handle());
-        skip |= LogError(CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
-                         "the %s is using imageView %s that is invalid or has been destroyed.%s",
-                         DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(image_view).c_str(),
-                         DescribeInstruction().c_str());
+        skip |= LogError(
+            CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
+            "the %s is using imageView %s that is invalid or has been destroyed.%s%s",
+            DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(image_view).c_str(),
+            image_view == VK_NULL_HANDLE ? "\nHint: VK_NULL_HANDLE can be allowed if the nullDescriptor feature is enabled." : "",
+            DescribeInstruction().c_str());
         return skip;  // if invalid, end early
     }
 
@@ -1319,10 +1324,12 @@ bool DescriptorValidator::ValidateDescriptor(const spirv::ResourceInterfaceVaria
     if ((!buffer_view_state && !dev_proxy.enabled_features.nullDescriptor) ||
         (buffer_view_state && buffer_view_state->Destroyed())) {
         const LogObjectList objlist(this->objlist, descriptor_set.Handle());
-        skip |= LogError(CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
-                         "the %s is using bufferView %s that is invalid or has been destroyed.%s",
-                         DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(buffer_view).c_str(),
-                         DescribeInstruction().c_str());
+        skip |= LogError(
+            CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
+            "the %s is using bufferView %s that is invalid or has been destroyed.%s%s",
+            DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(buffer_view).c_str(),
+            buffer_view == VK_NULL_HANDLE ? "\nHint: VK_NULL_HANDLE can be allowed if the nullDescriptor feature is enabled." : "",
+            DescribeInstruction().c_str());
         return skip;  // early return if invalid
     }
 
@@ -1502,10 +1509,12 @@ bool DescriptorValidator::ValidateDescriptor(const spirv::ResourceInterfaceVaria
             // the AccelerationStructure could be null via nullDescriptor and accessing it is legal
             if (acc != VK_NULL_HANDLE || !dev_proxy.enabled_features.nullDescriptor) {
                 const LogObjectList objlist(this->objlist, descriptor_set.Handle());
-                skip |= LogError(CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
-                                 "the %s is using acceleration structure %s that is invalid or has been destroyed.%s",
-                                 DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(acc).c_str(),
-                                 DescribeInstruction().c_str());
+                skip |= LogError(
+                    CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
+                    "the %s is using acceleration structure %s that is invalid or has been destroyed.%s%s",
+                    DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(acc).c_str(),
+                    acc == VK_NULL_HANDLE ? "\nHint: VK_NULL_HANDLE can be allowed if the nullDescriptor feature is enabled." : "",
+                    DescribeInstruction().c_str());
             }
         } else if (auto as_buffer = acc_node->GetFirstValidBuffer(*dev_proxy.device_state)) {
             for (const auto& mem_binding : as_buffer.state->GetInvalidMemory()) {
@@ -1567,10 +1576,12 @@ bool DescriptorValidator::ValidateDescriptor(const spirv::ResourceInterfaceVaria
     if ((!tensor_view_state && !dev_proxy.enabled_features.nullDescriptor) ||
         (tensor_view_state && tensor_view_state->Destroyed())) {
         const LogObjectList objlist(this->objlist, descriptor_set.Handle());
-        skip |= LogError(CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
-                         "the %s is using tensorView %s that is invalid or has been destroyed.%s",
-                         DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(tensor_view).c_str(),
-                         DescribeInstruction().c_str());
+        skip |= LogError(
+            CreateActionVuid(loc.Get().function, ActionVUID::DESCRIPTOR_08114), objlist, loc.Get(),
+            "the %s is using tensorView %s that is invalid or has been destroyed.%s%s",
+            DescribeDescriptor(resource_variable, index, descriptor_type).c_str(), FormatHandle(tensor_view).c_str(),
+            tensor_view == VK_NULL_HANDLE ? "\nHint: VK_NULL_HANDLE can be allowed if the nullDescriptor feature is enabled." : "",
+            DescribeInstruction().c_str());
         return skip;  // early return if invalid
     }
 
@@ -1622,13 +1633,13 @@ bool DescriptorValidator::ValidateDescriptor(const spirv::ResourceInterfaceVaria
         }
     }
 
-    VkTensorUsageFlagBitsARM usage_flag = (loc.Get().function == Func::vkCmdDispatchDataGraphARM)
-                                              ? VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM
-                                              : VK_TENSOR_USAGE_SHADER_BIT_ARM;
+    const bool is_data_graph = loc.Get().function == Func::vkCmdDispatchDataGraphARM;
+    const VkTensorUsageFlagBitsARM usage_flag = is_data_graph ? VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM : VK_TENSOR_USAGE_SHADER_BIT_ARM;
     if ((tensor_state->create_info.pDescription->usage & usage_flag) == 0) {
         const LogObjectList objlist(cb_state.Handle(), this->objlist, descriptor_set.Handle(), tensor_state->Handle());
-        skip |= LogError(CreateActionVuid(loc.Get().function, vvl::ActionVUID::TENSOR_09900), objlist, loc.Get(),
-                         "the %s is using tensor %s created with usage %s, which doesn't include %s.%s",
+        skip |= LogError(CreateActionVuid(loc.Get().function,
+                                          is_data_graph ? vvl::ActionVUID::TENSOR_DATA_GRAPH_09930 : vvl::ActionVUID::TENSOR_09900),
+                         objlist, loc.Get(), "the %s is using tensor %s created with usage %s, which doesn't include %s.%s",
                          DescribeDescriptor(resource_variable, index, descriptor_type).c_str(),
                          FormatHandle(tensor_state->Handle()).c_str(),
                          string_VkTensorUsageFlagsARM(tensor_state->create_info.pDescription->usage).c_str(),

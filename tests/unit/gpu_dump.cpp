@@ -256,6 +256,52 @@ TEST_F(NegativeGpuDump, DescriptorBufferNoDescriptor) {
     m_command_buffer.End();
 }
 
+TEST_F(NegativeGpuDump, DescriptorBufferInlineUniformBlock) {
+    AddRequiredFeature(vkt::Feature::inlineUniformBlock);
+    RETURN_IF_SKIP(InitDescriptorBuffer());
+
+    vkt::DescriptorSetLayout ds_layout(*m_device, {0, VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK, 16, VK_SHADER_STAGE_ALL, nullptr},
+                                       VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT);
+    vkt::PipelineLayout pipeline_layout(*m_device, {&ds_layout});
+
+    vkt::Buffer descriptor_buffer(*m_device, 256, VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT, vkt::device_address);
+
+    const char* cs_source = R"glsl(
+        #version 450
+        layout(set = 0, binding = 0) uniform InlineBlock {
+            uvec4 value;
+        };
+        void main() {
+            if (value.x == 7) {
+                barrier();
+            }
+        }
+    )glsl";
+
+    CreateComputePipelineHelper pipe(*this);
+    pipe.cs_ = VkShaderObj(*m_device, cs_source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_2);
+    pipe.cp_ci_.flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+    pipe.cp_ci_.layout = pipeline_layout;
+    pipe.CreateComputePipeline();
+
+    m_command_buffer.Begin();
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+
+    VkDescriptorBufferBindingInfoEXT descriptor_buffer_binding_info = vku::InitStructHelper();
+    descriptor_buffer_binding_info.address = descriptor_buffer.Address();
+    descriptor_buffer_binding_info.usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT;
+    vk::CmdBindDescriptorBuffersEXT(m_command_buffer, 1, &descriptor_buffer_binding_info);
+
+    uint32_t buffer_index = 0;
+    VkDeviceSize buffer_offset = 0;
+    vk::CmdSetDescriptorBufferOffsetsEXT(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &buffer_index,
+                                         &buffer_offset);
+    m_errorMonitor->SetDesiredInfo("VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK");
+    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
 // closet we will get to VU 08053/08054
 TEST_F(NegativeGpuDump, DescriptorBufferWrongBufferType) {
     RETURN_IF_SKIP(InitDescriptorBuffer());
@@ -2805,15 +2851,13 @@ TEST_F(NegativeGpuDump, DescriptorHeapIndirectIndexMemoryOffset) {
     m_command_buffer.PushDataEXT(0, sizeof(VkDeviceAddress), &index_address);
     vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
 
-    const std::string expected = "indirectIndex offset: 1 * " + std::to_string(stride);
-
-    m_errorMonitor->SetDesiredInfo(expected.c_str());
+    m_errorMonitor->SetDesiredInfo("GPU-DUMP");
     vk::CmdDispatch(m_command_buffer, 1, 1, 1);
     m_errorMonitor->VerifyFound();
 
     if (!IsPlatformMockICD()) {
         memory.Unmap();
-        m_errorMonitor->SetDesiredInfo(expected.c_str());
+        m_errorMonitor->SetDesiredInfo("GPU-DUMP");
         vk::CmdDispatch(m_command_buffer, 1, 1, 1);
         m_errorMonitor->VerifyFound();
     }
@@ -2929,6 +2973,177 @@ TEST_F(NegativeGpuDump, DescriptorBufferAliasNoDebugNames) {
     vk::CmdSetDescriptorBufferOffsetsEXT(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &buffer_index,
                                          &buffer_offset);
 
+    m_errorMonitor->SetDesiredInfo("GPU-DUMP");
+    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeGpuDump, DescriptorHeapIndirectIndexArrayOutsideHeap) {
+    RETURN_IF_SKIP(InitDescriptorHeap());
+    const VkDeviceSize stride = heap_props.bufferDescriptorSize;
+    vkt::DescriptorHeapEXT desc_heap(*this);
+    desc_heap.CreateResourceHeap(stride * 4);
+
+    const char* cs_source = R"glsl(
+        #version 450
+        layout (set = 0, binding = 0) buffer SSBO_0 {
+            uint data;
+        } ssbo[4];
+
+        void main() {
+            ssbo[0].data = 0;
+        }
+    )glsl";
+
+    // Index zero starts right at the end of the heap
+    vkt::Buffer index_buffer(*m_device, 16, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vkt::device_address);
+    uint32_t* index_data = (uint32_t*)index_buffer.Memory().Map();
+    index_data[0] = (uint32_t)(desc_heap.GetResourceHeapSize() / stride);
+
+    VkDescriptorSetAndBindingMappingEXT mapping = MakeSetAndBindingMappingEXT(0, 0);
+    mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_INDIRECT_INDEX_EXT;
+    mapping.sourceData.indirectIndex.pushOffset = 0;
+    mapping.sourceData.indirectIndex.heapIndexStride = (uint32_t)stride;
+    mapping.sourceData.indirectIndex.heapArrayStride = (uint32_t)stride;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 1u;
+    mapping_info.pMappings = &mapping;
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+
+    m_command_buffer.Begin();
+    desc_heap.BindResourceHeap(m_command_buffer);
+    VkDeviceAddress index_address = index_buffer.Address();
+    m_command_buffer.PushDataEXT(0, sizeof(VkDeviceAddress), &index_address);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    m_errorMonitor->SetDesiredWarning("OUT OF BOUNDS - descriptor is not in the resource heap");
+    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeGpuDump, DescriptorHeapArrayStartsOutsideHeap) {
+    RETURN_IF_SKIP(InitDescriptorHeap());
+    const VkDeviceSize stride = heap_props.bufferDescriptorSize;
+    vkt::DescriptorHeapEXT desc_heap(*this);
+    desc_heap.CreateResourceHeap(stride * 4);
+
+    const char* cs_source = R"glsl(
+        #version 450
+        layout (set = 0, binding = 0) buffer SSBO_0 {
+            uint data;
+        } ssbo[4];
+
+        void main() {
+            ssbo[0].data = 0;
+        }
+    )glsl";
+
+    // Not a power of two, so the number of elements left in the heap can't accidentally wrap around to zero
+    VkDescriptorSetAndBindingMappingEXT mapping = MakeSetAndBindingMappingEXT(0, 0);
+    mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+    mapping.sourceData.constantOffset.heapOffset = (uint32_t)desc_heap.GetResourceHeapSize();
+    mapping.sourceData.constantOffset.heapArrayStride = (uint32_t)(stride * 3);
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 1u;
+    mapping_info.pMappings = &mapping;
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+
+    m_command_buffer.Begin();
+    desc_heap.BindResourceHeap(m_command_buffer);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    m_errorMonitor->SetDesiredWarning("any element starting at index [0] will be out of bounds of the heap");
+    vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeGpuDump, DescriptorHeapReservedRangeLargeRuntimeArray) {
+    RETURN_IF_SKIP(InitDescriptorHeap());
+
+    const VkDeviceSize stride = heap_props.bufferDescriptorSize;
+    const VkDeviceSize heap_size = std::min<VkDeviceSize>(64 * 1024 * 1024, heap_props.maxResourceHeapSize);
+    vkt::DescriptorHeapEXT desc_heap(*this);
+    desc_heap.CreateResourceHeap(heap_size - heap_props.minResourceHeapReservedRange);
+
+    const char* cs_source = R"glsl(
+        #version 450
+        #extension GL_EXT_nonuniform_qualifier : enable
+        layout (set = 0, binding = 0) buffer SSBO {
+            uint data;
+        } buffers[];
+
+        void main() {
+            uint tid = gl_GlobalInvocationID.x;
+            buffers[tid].data = 0;
+        }
+    )glsl";
+    VkDescriptorSetAndBindingMappingEXT mapping = MakeSetAndBindingMappingEXT(0, 0);
+    mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+    mapping.sourceData.constantOffset.heapOffset = 0;
+    mapping.sourceData.constantOffset.heapArrayStride = (uint32_t)stride;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 1u;
+    mapping_info.pMappings = &mapping;
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+
+    VkBindHeapInfoEXT bind_resource_info = vku::InitStructHelper();
+    bind_resource_info.heapRange = desc_heap.GetResourceHeapAddressRange();
+    bind_resource_info.reservedRangeOffset = desc_heap.GetResourceHeapReservedRangeOffset();
+    bind_resource_info.reservedRangeSize = heap_props.minResourceHeapReservedRange;
+    if (bind_resource_info.reservedRangeSize == 0) {
+        bind_resource_info.reservedRangeOffset = bind_resource_info.heapRange.size - stride;
+        bind_resource_info.reservedRangeSize = stride;
+    }
+
+    m_command_buffer.Begin();
+    vk::CmdBindResourceHeapEXT(m_command_buffer, &bind_resource_info);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    for (uint32_t i = 0; i < 100; i++) {
+        m_errorMonitor->SetDesiredInfo("RESERVED RANGE");
+        vk::CmdDispatch(m_command_buffer, 1, 1, 1);
+        m_errorMonitor->VerifyFound();
+    }
+    m_command_buffer.End();
+}
+
+TEST_F(NegativeGpuDump, DescriptorHeapIndirectIndexArrayAlias) {
+    TEST_DESCRIPTION("2 bindings, the second binding reads the next indirect index");
+    RETURN_IF_SKIP(InitDescriptorHeap());
+    const VkDeviceSize stride = heap_props.bufferDescriptorSize;
+    vkt::DescriptorHeapEXT desc_heap(*this);
+    desc_heap.CreateResourceHeap(stride * 2);
+
+    const char* cs_source = R"glsl(
+        #version 450
+        layout (set = 0, binding = 1) buffer SSBO_1 {
+            uint data;
+        };
+
+        void main() {
+            data = 0;
+        }
+    )glsl";
+
+    vkt::Buffer index_buffer(*m_device, 16, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, vkt::device_address);
+    uint32_t* index_data = (uint32_t*)index_buffer.Memory().Map();
+    index_data[0] = 0;
+    index_data[1] = 1;
+
+    VkDescriptorSetAndBindingMappingEXT mapping = MakeSetAndBindingMappingEXT(0, 0, 2);
+    mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_INDIRECT_INDEX_ARRAY_EXT;
+    mapping.sourceData.indirectIndexArray.pushOffset = 0;
+    mapping.sourceData.indirectIndexArray.heapIndexStride = (uint32_t)stride;
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 1u;
+    mapping_info.pMappings = &mapping;
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+
+    m_command_buffer.Begin();
+    desc_heap.BindResourceHeap(m_command_buffer);
+    const VkDeviceAddress index_address = index_buffer.Address();
+    m_command_buffer.PushDataEXT(0, sizeof(VkDeviceAddress), &index_address);
+    vk::CmdBindPipeline(m_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
     m_errorMonitor->SetDesiredInfo("GPU-DUMP");
     vk::CmdDispatch(m_command_buffer, 1, 1, 1);
     m_errorMonitor->VerifyFound();

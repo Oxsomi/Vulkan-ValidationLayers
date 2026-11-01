@@ -23,6 +23,7 @@
 
 #pragma once
 #include <atomic>
+#include <mutex>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -106,6 +107,7 @@ struct DeviceExtensionProperties {
     VkPhysicalDeviceNestedCommandBufferPropertiesEXT nested_command_buffer_props;
     VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_buffer_props;
     VkPhysicalDeviceDescriptorBufferDensityMapPropertiesEXT descriptor_buffer_density_props;
+    VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT graphics_pipeline_library_props;
     VkPhysicalDeviceDeviceGeneratedCommandsPropertiesEXT device_generated_commands_props;
     VkPhysicalDevicePipelineBinaryPropertiesKHR pipeline_binary_props;
     VkPhysicalDeviceMapMemoryPlacedPropertiesEXT map_memory_placed_props;
@@ -267,9 +269,10 @@ class HandleWrapper : public Logger {
     static bool wrap_handles;
 
     // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/13329
-    // The driver calls the VK_EXT_device_memory_report callback directly, reporting its own handles, which the app could not match
-    // if they were wrapped.
-    // So handles created by a device using it are passed through as they are (as if handle wrapping was disabled).
+    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/6972
+    // The driver calls the VK_EXT_device_memory_report callback (and the debug utils callback, for
+    // VK_EXT_device_address_binding_report) directly, reporting its own handles, which the app could not match if they were
+    // wrapped. So handles created by a device using either are passed through as they are (as if handle wrapping was disabled).
     // Handles wrapped by the instance (VkSurfaceKHR) are still found in |unique_id_mapping|, and everything not found there is one
     // of this device's handles.
     bool passthrough_handles = false;
@@ -397,6 +400,9 @@ class DispatchDevice : public HandleWrapper {
     vvl::concurrent_unordered_map<VkDeferredOperationKHR, std::vector<std::function<void(std::pair<uint32_t, VkPipeline*>)>>, 0>
         deferred_operation_post_check;
     vvl::concurrent_unordered_map<VkDeferredOperationKHR, std::pair<uint32_t, VkPipeline*>, 0> deferred_operation_pipelines;
+    // Multiple threads can see a deferred operation complete (vkDeferredOperationJoinKHR or vkGetDeferredOperationResultKHR
+    // returning VK_SUCCESS), the functions above need to be done running before any of them returns to the application
+    std::mutex deferred_operation_mutex;
 
     // State we track in order to populate HandleData for things such as ignored pointers
     vvl::unordered_map<VkCommandBuffer, VkCommandPool> secondary_cb_map{};

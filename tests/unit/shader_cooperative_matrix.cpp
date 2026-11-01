@@ -804,7 +804,7 @@ TEST_F(NegativeShaderCooperativeMatrix, MatchSizeWithProperties) {
 
     m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-OpTypeCooperativeMatrixKHR-10163");
     CreateComputePipelineHelper pipe(*this);
-    pipe.cs_ = VkShaderObj(*m_device, source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_2);
+    pipe.cs_ = VkShaderObj(*m_device, source, VK_SHADER_STAGE_COMPUTE_BIT, SPV_ENV_VULKAN_1_3);
     pipe.CreateComputePipeline();
     m_errorMonitor->VerifyFound();
 }
@@ -814,6 +814,12 @@ TEST_F(NegativeShaderCooperativeMatrix, SignedCheck) {
     SetTargetApiVersion(VK_API_VERSION_1_3);
     AddRequiredFeature(vkt::Feature::shaderFloat16);
     RETURN_IF_SKIP(InitCooperativeMatrixKHR());
+
+    CooperativeMatrixHelper helper(*this);
+    if (!helper.HasValidProperty(VK_SCOPE_SUBGROUP_KHR, 16, 16, 16, VK_COMPONENT_TYPE_SINT32_KHR) &&
+        !helper.HasValidProperty(VK_SCOPE_SUBGROUP_KHR, 16, 16, 16, VK_COMPONENT_TYPE_UINT32_KHR)) {
+        GTEST_SKIP() << "No subgroup 16x16x16 32-bit integer cooperative matrix property";
+    }
 
     // OpExtension "SPV_KHR_storage_buffer_storage_class"
     const std::string cs_source_template = R"glsl(
@@ -871,10 +877,10 @@ TEST_F(NegativeShaderCooperativeMatrix, SignedCheck) {
         const char* remove;
         const char* expect;
     } subtests[] = {
-        {"MatrixASignedComponentsKHR|", "VUID-RuntimeSpirv-OpTypeCooperativeMatrixKHR-10163"},
-        {"MatrixBSignedComponentsKHR|", "VUID-RuntimeSpirv-OpTypeCooperativeMatrixKHR-10163"},
-        {"MatrixCSignedComponentsKHR|", "VUID-RuntimeSpirv-OpTypeCooperativeMatrixKHR-10163"},
-        {"|MatrixResultSignedComponentsKHR", "VUID-RuntimeSpirv-OpTypeCooperativeMatrixKHR-10163"},
+        {"MatrixASignedComponentsKHR|", "VUID-RuntimeSpirv-OpCooperativeMatrixMulAddKHR-10060"},
+        {"MatrixBSignedComponentsKHR|", "VUID-RuntimeSpirv-OpCooperativeMatrixMulAddKHR-10060"},
+        {"MatrixCSignedComponentsKHR|", "VUID-RuntimeSpirv-OpCooperativeMatrixMulAddKHR-10060"},
+        {"|MatrixResultSignedComponentsKHR", "VUID-RuntimeSpirv-OpCooperativeMatrixMulAddKHR-10060"},
     };
 
     for (const auto& x : subtests) {

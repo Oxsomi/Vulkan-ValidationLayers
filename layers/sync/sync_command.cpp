@@ -1020,7 +1020,7 @@ bool BarrierCommand::Validate(const SyncEnvironment& env, const AccessContext& a
     const SyncValidator& validator = env.validator;
 
     for (const auto& image_barrier : barrier_set.image_barriers) {
-        if (!image_barrier.layout_transition) {
+        if (!image_barrier.IsLayoutTransition()) {
             // The only accesses that originate from the pipeline barrier are layout transitions
             continue;
         }
@@ -1072,6 +1072,9 @@ void SetEventCommand::Apply(SyncEnvironment& env, ResourceUsageTag tag, AccessCo
     // the queue access map; consider sharing immutable state or storing only the event source scope.
     auto src_access_context = std::make_shared<AccessContext>(env.validator);
     src_access_context->InitFrom(access_context);
+    // Event scopes use exact ranges for filtering and are reused by all barriers in subsequent waits.
+    // TODO: Support encoded event scopes in filtering and hazard detection to avoid this conversion
+    src_access_context->ConvertToRegularEntries();
 
     ApplyCmdSetEvent(env, event, src_exec_scope, src_access_context, tag, command);
 }

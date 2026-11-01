@@ -36,7 +36,12 @@ config("generated_layers_config") {
 }
 
 config("vulkan_internal_config") {
-  defines = [ "VK_ENABLE_BETA_EXTENSIONS" ]
+  defines = [
+    "VK_ENABLE_BETA_EXTENSIONS",
+
+    # Enables the spv::*ToString() helpers in spirv.hpp
+    "SPV_ENABLE_UTILITY_CODE",
+  ]
 
   cflags = []
   if (is_clang || !is_win) {
@@ -185,7 +190,6 @@ vvl_sources = [
   "layers/gpu_dump/gpu_dump_state.cpp",
   "layers/gpu_dump/gpu_dump_state.h",
   "layers/gpuav/core/gpuav.h",
-  "layers/gpuav/core/gpuav_constants.h",
   "layers/gpuav/core/gpuav_features.cpp",
   "layers/gpuav/core/gpuav_record.cpp",
   "layers/gpuav/core/gpuav_settings.cpp",
@@ -217,6 +221,7 @@ vvl_sources = [
   "layers/gpuav/instrumentation/shared_memory_data_race.cpp",
   "layers/gpuav/instrumentation/trace_ray.cpp",
   "layers/gpuav/instrumentation/vertex_attribute_fetch_oob.cpp",
+  "layers/gpuav/resources/gpuav_queue_state.h",
   "layers/gpuav/resources/gpuav_shader_resources.h",
   "layers/gpuav/resources/gpuav_state_trackers.cpp",
   "layers/gpuav/resources/gpuav_state_trackers.h",
@@ -426,6 +431,8 @@ vvl_sources = [
   "layers/sync/sync_image.h",
   "layers/sync/sync_image_encoding.cpp",
   "layers/sync/sync_image_encoding.h",
+  "layers/sync/sync_queue_command.cpp",
+  "layers/sync/sync_queue_command.h",
   "layers/sync/sync_render_pass.cpp",
   "layers/sync/sync_render_pass.h",
   "layers/sync/sync_reporting.cpp",

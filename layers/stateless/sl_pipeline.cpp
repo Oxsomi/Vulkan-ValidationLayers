@@ -1415,7 +1415,9 @@ bool Device::manual_PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPi
                     if (!IsExtEnabled(extensions.vk_ext_extended_dynamic_state) ||
                         (!has_dynamic_viewport_with_count && !has_dynamic_scissor_with_count)) {
                         skip |= LogError("VUID-VkPipelineViewportStateCreateInfo-scissorCount-04134", device, viewport_loc,
-                                         "scissorCount (%" PRIu32 ") is different from viewportCount (%" PRIu32 ").",
+                                         "scissorCount (%" PRIu32 ") is different from viewportCount (%" PRIu32
+                                         ").\nHint: This can be allowed if VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT or "
+                                         "VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT is a dynamic state.",
                                          viewport_state.scissorCount, viewport_state.viewportCount);
                     }
                 }
@@ -1590,7 +1592,7 @@ bool Device::manual_PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPi
             bool uses_color_attachment = false;
             bool uses_depthstencil_attachment = false;
             {
-                std::unique_lock<std::mutex> lock(renderpass_map_mutex);
+                std::lock_guard<std::mutex> lock(renderpass_map_mutex);
                 const auto subpasses_uses_it = renderpasses_states.find(create_info.renderPass);
                 if (subpasses_uses_it != renderpasses_states.end()) {
                     const auto& subpasses_uses = subpasses_uses_it->second;
@@ -1601,7 +1603,6 @@ bool Device::manual_PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPi
                         uses_depthstencil_attachment = true;
                     }
                 }
-                lock.unlock();
             }
 
             if (create_info.pDepthStencilState != nullptr && uses_depthstencil_attachment) {
@@ -1622,10 +1623,11 @@ bool Device::manual_PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPi
                                                    "VUID-VkPipelineColorBlendStateCreateInfo-logicOpEnable-00607");
                 }
 
-                const bool dynamic_not_set = (!vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT) ||
-                                              !vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT) ||
+                const bool dynamic_not_set = (!vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT) ||
                                               !vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT) ||
-                                              !vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT));
+                                              !vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT) ||
+                                              (IsExtEnabled(extensions.vk_ext_blend_operation_advanced) &&
+                                               !vvl::Contains(dynamic_state_map, VK_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT)));
 
                 // If any of the dynamic states are not set still need a valid array
                 if ((color_blend_state.attachmentCount > 0) && dynamic_not_set) {

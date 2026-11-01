@@ -104,7 +104,7 @@ SyncExecScope SyncExecScope::MakeSrc(VkQueueFlags queue_flags, VkPipelineStageFl
 
     // ALL_COMMANDS stage includes all operations performed by the gpu, not only operations that run on the stages.
     // BOTTOM_OF_PIPE has no accesses of its own, so does not add to stage_mask_accesses, but in the context of
-    // semaphoer scopes it adds to exec_scope_accesses
+    // semaphore scopes it adds to exec_scope_accesses
     if (stage_mask & VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT) {
         result.stage_mask_accesses |= SYNC_IMAGE_LAYOUT_TRANSITION_BIT;
     }
@@ -345,8 +345,7 @@ void BarrierSet::MakeImageMemoryBarriers(const SyncValidator& sync_state, const 
             }
 
             const SyncBarrier sync_barrier(src, barrier.srcAccessMask, dst, barrier.dstAccessMask);
-            const bool layout_transition = barrier.oldLayout != barrier.newLayout;
-            image_barriers.emplace_back(image, sync_barrier, subresource_range, layout_transition, index);
+            image_barriers.emplace_back(image, sync_barrier, subresource_range, barrier.oldLayout, barrier.newLayout, index);
         }
     }
 }
@@ -368,8 +367,7 @@ void BarrierSet::MakeImageMemoryBarriers(const SyncValidator& sync_state, VkQueu
             }
 
             const SyncBarrier sync_barrier(src, barrier.srcAccessMask, dst, barrier.dstAccessMask);
-            const bool layout_transition = barrier.oldLayout != barrier.newLayout;
-            image_barriers.emplace_back(image, sync_barrier, subresource_range, layout_transition, index);
+            image_barriers.emplace_back(image, sync_barrier, subresource_range, barrier.oldLayout, barrier.newLayout, index);
         }
     }
 }
@@ -380,6 +378,7 @@ void BarrierSet::MakeImageMemoryBarriers(const SyncValidator& sync_state, VkQueu
 // to ensure independent barrier application
 //
 struct ApplySingleBufferBarrierFunctor {
+    const bool layout_transition = false;
     const AccessContext& access_context;
     const BarrierScope& barrier_scope;
     const SyncBarrier& barrier;
@@ -458,7 +457,7 @@ static void ApplySingleImageBarrier(const DeviceFeatures& features, QueueId queu
                                     ResourceUsageTag tag) {
     const BarrierScope barrier_scope(image_barrier.barrier, queue_id);
     ApplySingleImageBarrierFunctor apply_barrier(access_context, barrier_scope, image_barrier.barrier,
-                                                 image_barrier.layout_transition, image_barrier.handle_index, tag);
+                                                 image_barrier.IsLayoutTransition(), image_barrier.handle_index, tag);
 
     const auto& sub_state = SubState(*image_barrier.image);
     const bool can_transition_depth_slices =
@@ -480,10 +479,9 @@ static void ApplySingleMemoryBarrier(QueueId queue_id, AccessContext& access_con
 static void ApplyMultipleBarriers(const DeviceFeatures& features, QueueId queue_id, AccessContext& access_context,
                                   const BarrierSet& barrier_set, ResourceUsageTag tag) {
     // Apply markup action.
-    // The markup action does not change any access state but it can trim the access map according to the
-    // provided range and creates infill ranges if necessary (for layout transitions). The purpose of all
-    // this is to ensure that after markup action the topology of access map ranges is finalized so we can
-    // safely cache pointers to specific access states with a goal to apply pending barriers in the end.
+    // Markup splits entries at barrier boundaries and fills map gaps and absent outside spans for
+    // layout transitions. This finalizes the map structure before collecting access state pointers
+    // for pending barriers.
     //
     // NOTE: it is enough to apply markup action to buffer and image barriers. The global barriers
     // do not use infill operations (no layout transitions) and also do not split access map ranges
@@ -501,7 +499,7 @@ static void ApplyMultipleBarriers(const DeviceFeatures& features, QueueId queue_
         const bool can_transition_depth_slices =
             CanTransitionDepthSlices(features, sub_state.base.GetImageType(), sub_state.base.create_flags);
         auto range_gen = sub_state.MakeImageRangeGen(barrier.subresource_range, can_transition_depth_slices);
-        ApplyMarkupFunctor markup_action(barrier.layout_transition);
+        ApplyMarkupFunctor markup_action(barrier.IsLayoutTransition());
         access_context.UpdateMemoryAccessState(markup_action, range_gen);
     }
 
@@ -521,7 +519,7 @@ static void ApplyMultipleBarriers(const DeviceFeatures& features, QueueId queue_
     }
     for (const SyncImageBarrier& barrier : barrier_set.image_barriers) {
         const BarrierScope barrier_scope(barrier.barrier, queue_id);
-        CollectBarriersFunctor collect_barriers(access_context, barrier_scope, barrier.barrier, barrier.layout_transition,
+        CollectBarriersFunctor collect_barriers(access_context, barrier_scope, barrier.barrier, barrier.IsLayoutTransition(),
                                                 barrier.handle_index, pending_barriers);
 
         const auto& sub_state = SubState(*barrier.image);

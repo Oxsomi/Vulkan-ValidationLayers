@@ -1129,8 +1129,10 @@ bool CoreChecks::ValidateCopyImageRegionCommon(const ImageCopyRegion& region, co
                         (is_2 || is_host) ? "VUID-VkImageCopy2-apiVersion-07941" : "VUID-VkImageCopy-apiVersion-07941";
                     skip |=
                         LogError(vuid, region.objlist, src_subresource_loc.dot(Field::layerCount),
-                                 "(%" PRIu32 ") does not match %s (%" PRIu32 ").", region.normalized_src_layer_count,
-                                 dst_subresource_loc.dot(Field::layerCount).Fields().c_str(), region.normalized_dst_layer_count);
+                                 "(%" PRIu32 ") does not match %s (%" PRIu32
+                                 ").\nHint: This can be allowed in some cases if VK_KHR_maintenance1 (or Vulkan 1.1) is enabled.",
+                                 region.normalized_src_layer_count, dst_subresource_loc.dot(Field::layerCount).Fields().c_str(),
+                                 region.normalized_dst_layer_count);
                 }
             }
             if (!IsExtEnabled(extensions.vk_khr_sampler_ycbcr_conversion)) {
@@ -1138,11 +1140,12 @@ bool CoreChecks::ValidateCopyImageRegionCommon(const ImageCopyRegion& region, co
                 if (region.src_subresource.aspectMask != region.dst_subresource.aspectMask) {
                     const char* vuid =
                         (is_2 || is_host) ? "VUID-VkImageCopy2-apiVersion-07940" : "VUID-VkImageCopy-apiVersion-07940";
-                    skip |=
-                        LogError(vuid, region.objlist, src_subresource_loc.dot(Field::aspectMask), "(%s) does not match %s (%s).",
-                                 string_VkImageAspectFlags(region.src_subresource.aspectMask).c_str(),
-                                 dst_subresource_loc.dot(Field::aspectMask).Fields().c_str(),
-                                 string_VkImageAspectFlags(region.dst_subresource.aspectMask).c_str());
+                    skip |= LogError(vuid, region.objlist, src_subresource_loc.dot(Field::aspectMask),
+                                     "(%s) does not match %s (%s).\nHint: This can be allowed in some cases if "
+                                     "VK_KHR_sampler_ycbcr_conversion (or Vulkan 1.1) is enabled.",
+                                     string_VkImageAspectFlags(region.src_subresource.aspectMask).c_str(),
+                                     dst_subresource_loc.dot(Field::aspectMask).Fields().c_str(),
+                                     string_VkImageAspectFlags(region.dst_subresource.aspectMask).c_str());
                 }
             }
         }
@@ -1178,7 +1181,8 @@ bool CoreChecks::ValidateCopyImageRegionCommon(const ImageCopyRegion& region, co
                     skip |= LogError(vuid, region.objlist, region_loc.dot(Field::srcSubresource).dot(Field::baseArrayLayer),
                                      "is %" PRIu32
                                      " and srcSubresource.layerCount is %s\nFor copies with either src or dst of type "
-                                     "VK_IMAGE_TYPE_3D, baseArrayLayer must be 0 and layerCount must be 1.",
+                                     "VK_IMAGE_TYPE_3D, baseArrayLayer must be 0 and layerCount must be 1.\nHint: This can be "
+                                     "allowed in some cases if VK_KHR_maintenance1 (or Vulkan 1.1) is enabled.",
                                      region.src_subresource.baseArrayLayer,
                                      string_LayerCount(region.src_state.GetArrayLayers(), region.src_subresource).c_str());
                 }
@@ -1187,7 +1191,8 @@ bool CoreChecks::ValidateCopyImageRegionCommon(const ImageCopyRegion& region, co
                     skip |= LogError(vuid, region.objlist, region_loc.dot(Field::dstSubresource).dot(Field::baseArrayLayer),
                                      "is %" PRIu32
                                      " and dstSubresource.layerCount is %s\nFor copies with either src or dst of type "
-                                     "VK_IMAGE_TYPE_3D, baseArrayLayer must be 0 and layerCount must be 1.",
+                                     "VK_IMAGE_TYPE_3D, baseArrayLayer must be 0 and layerCount must be 1.\nHint: This can be "
+                                     "allowed in some cases if VK_KHR_maintenance1 (or Vulkan 1.1) is enabled.",
                                      region.dst_subresource.baseArrayLayer,
                                      string_LayerCount(region.dst_state.GetArrayLayers(), region.dst_subresource).c_str());
                 }
@@ -1619,9 +1624,11 @@ bool CoreChecks::ValidateCmdCopyImage(VkCommandBuffer commandBuffer, VkImage src
         } else {  // !vk_khr_maintenance1
             if ((src_is_2d || dst_is_2d) && (region.extent.depth != 1)) {
                 vuid = is_2 ? "VUID-VkCopyImageInfo2-apiVersion-08969" : "VUID-vkCmdCopyImage-apiVersion-08969";
-                skip |= LogError(vuid, all_objlist, region_loc,
-                                 "srcImage is %s and dstImage is %s, but extent.depth is %" PRIu32 " (should be 1).",
-                                 string_VkImageType(src_image_type), string_VkImageType(dst_image_type), region.extent.depth);
+                skip |= LogError(
+                    vuid, all_objlist, region_loc,
+                    "srcImage is %s and dstImage is %s, but extent.depth is %" PRIu32
+                    " (should be 1).\nHint: This can be allowed in some cases if VK_KHR_maintenance1 (or Vulkan 1.1) is enabled.",
+                    string_VkImageType(src_image_type), string_VkImageType(dst_image_type), region.extent.depth);
             }
 
             if (src_image_type != dst_image_type) {
@@ -3289,7 +3296,9 @@ bool CoreChecks::ValidateCmdBlitImage(VkCommandBuffer commandBuffer, VkImage src
                                  "dstImage %s\n"
                                  "srcSubresource (baseArrayLayer = %" PRIu32
                                  ", layerCount = %s)\n"
-                                 "dstSubresource (baseArrayLayer = %" PRIu32 ", layerCount = %s)\n",
+                                 "dstSubresource (baseArrayLayer = %" PRIu32
+                                 ", layerCount = %s)\n"
+                                 "Hint: This can be allowed in some cases if maintenance8 feature is enabled.",
                                  string_VkImageType(src_type), string_VkImageType(dst_type), src_subresource.baseArrayLayer,
                                  string_LayerCount(src_image_state->GetArrayLayers(), src_subresource).c_str(),
                                  dst_subresource.baseArrayLayer,
@@ -4043,7 +4052,7 @@ bool CoreChecks::ValidateStridedDeviceAddressRange(VkCommandBuffer command_buffe
     bool skip = false;
     if (strided_range.stride > strided_range.size) {
         skip |= LogError("VUID-VkStridedDeviceAddressRangeKHR-stride-10957", command_buffer, strided_range_loc.dot(Field::stride),
-                         "(%" PRIu64 ") must be less than size (%" PRIu64 ")", strided_range.stride, strided_range.size);
+                         "(%" PRIu64 ") must not be greater than the size (%" PRIu64 ")", strided_range.stride, strided_range.size);
     }
 
     const char* usage_vuid = strided_range_loc.function == Func::vkCmdCopyMemoryIndirectKHR
@@ -4241,7 +4250,47 @@ bool CoreChecks::ValidateCopyMemoryToImageIndirectInfo(const vvl::CommandBuffer&
         }
 
         if (dst_image->GetImageType() == VK_IMAGE_TYPE_3D) {
-            // TODO - Add https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/11332
+            if (mip_level < dst_image->GetMipLevels()) {
+                const uint32_t depth = dst_image->GetEffectiveSubresourceExtent(subresource_layers).depth;
+                const uint32_t block_depth = vkuFormatTexelBlockExtent(dst_image->GetFormat()).depth;
+                const uint32_t base_array_layer = subresource_layers.baseArrayLayer;
+                const uint32_t layer_count = subresource_layers.layerCount;
+
+                if (base_array_layer >= depth) {
+                    skip |= LogError("VUID-VkCopyMemoryToImageIndirectInfoKHR-dstImage-12292", dst_objlist,
+                                     subresource_loc.dot(Field::baseArrayLayer),
+                                     "(%" PRIu32 ") must be less than the depth (%" PRIu32 ") of mipLevel %" PRIu32
+                                     " of the 3D dstImage.",
+                                     base_array_layer, depth, mip_level);
+                }
+
+                if (!IsIntegerMultipleOf(base_array_layer, block_depth)) {
+                    skip |= LogError("VUID-VkCopyMemoryToImageIndirectInfoKHR-dstImage-12291", dst_objlist,
+                                     subresource_loc.dot(Field::baseArrayLayer),
+                                     "(%" PRIu32 ") must be a multiple of the image format (%s) texel block depth (%" PRIu32 ").",
+                                     base_array_layer, string_VkFormat(dst_image->GetFormat()), block_depth);
+                }
+
+                if (layer_count != VK_REMAINING_ARRAY_LAYERS) {
+                    const uint32_t layer_end = base_array_layer + layer_count;
+                    if (layer_end > depth) {
+                        skip |= LogError("VUID-VkCopyMemoryToImageIndirectInfoKHR-dstImage-12289", dst_objlist,
+                                         subresource_loc.dot(Field::layerCount),
+                                         "(%" PRIu32 ") + baseArrayLayer (%" PRIu32
+                                         ") must be less than or equal to the depth (%" PRIu32 ") of mipLevel %" PRIu32
+                                         " of the 3D dstImage.",
+                                         layer_count, base_array_layer, depth, mip_level);
+                    } else if (layer_end != depth && !IsIntegerMultipleOf(layer_count, block_depth)) {
+                        skip |= LogError("VUID-VkCopyMemoryToImageIndirectInfoKHR-dstImage-12290", dst_objlist,
+                                         subresource_loc.dot(Field::layerCount),
+                                         "(%" PRIu32 ") must be a multiple of the image format (%s) texel block depth (%" PRIu32
+                                         "), or when added to baseArrayLayer (%" PRIu32 ") must equal the depth (%" PRIu32
+                                         ") of mipLevel %" PRIu32 ".",
+                                         layer_count, string_VkFormat(dst_image->GetFormat()), block_depth, base_array_layer, depth,
+                                         mip_level);
+                    }
+                }
+            }
         } else if (subresource_layers.layerCount != VK_REMAINING_ARRAY_LAYERS &&
                    subresource_layers.baseArrayLayer + subresource_layers.layerCount > dst_image->GetArrayLayers()) {
             skip |= LogError("VUID-VkCopyMemoryToImageIndirectInfoKHR-dstImage-12288", dst_objlist,

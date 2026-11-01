@@ -542,6 +542,8 @@ struct DeviceFeatures {
     bool streamingPerfCounters;
     // VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT
     bool graphicsPipelineLibrary;
+    // VkPhysicalDeviceHdrSmpteSt209450FeaturesGOOGLE
+    bool hdrSmpteSt209450;
     // VkPhysicalDeviceHdrVividFeaturesHUAWEI
     bool hdrVivid;
     // VkPhysicalDeviceHostImageCopyFeatures, VkPhysicalDeviceVulkan14Features
@@ -616,6 +618,8 @@ struct DeviceFeatures {
     bool maintenance10;
     // VkPhysicalDeviceMaintenance11FeaturesKHR
     bool maintenance11;
+    // VkPhysicalDeviceMaintenance12FeaturesKHR
+    bool maintenance12;
     // VkPhysicalDeviceMaintenance4Features, VkPhysicalDeviceVulkan13Features
     bool maintenance4;
     // VkPhysicalDeviceMaintenance5Features, VkPhysicalDeviceVulkan14Features

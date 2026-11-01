@@ -60,7 +60,8 @@ class APISpecific:
                 return [
                 'VK_EXT_validation_cache',
                 'VK_EXT_debug_marker',
-                'VK_EXT_tooling_info'
+                'VK_EXT_tooling_info',
+                'VK_EXT_frame_boundary'
             ]
 
 
@@ -95,6 +96,7 @@ class LayerChassisOutputGenerator(BaseGenerator):
         'vkCreateBuffer',
         'vkQueuePresentKHR',
         'vkCmdBindDescriptorBuffersEXT',
+        'vkAllocateMemory',
         # Need to inject HandleData logic
         'vkBeginCommandBuffer',
         # ValidationCache functions do not get dispatched

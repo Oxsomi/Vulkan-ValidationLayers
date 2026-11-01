@@ -3606,6 +3606,21 @@ FeatureAndName AddFeature(APIVersion api_version, vkt::Feature feature, void** i
                     "VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT::graphicsPipelineLibrary"};
         }
 
+        case Feature::hdrSmpteSt209450: {
+            auto vk_struct = const_cast<VkPhysicalDeviceHdrSmpteSt209450FeaturesGOOGLE*>(
+                vku::FindStructInPNextChain<VkPhysicalDeviceHdrSmpteSt209450FeaturesGOOGLE>(*inout_pnext_chain));
+            if (!vk_struct) {
+                vk_struct = new VkPhysicalDeviceHdrSmpteSt209450FeaturesGOOGLE;
+                *vk_struct = vku::InitStructHelper();
+                if (*inout_pnext_chain) {
+                    vvl::PnextChainAdd(*inout_pnext_chain, vk_struct);
+                } else {
+                    *inout_pnext_chain = vk_struct;
+                }
+            }
+            return {&vk_struct->hdrSmpteSt209450, "VkPhysicalDeviceHdrSmpteSt209450FeaturesGOOGLE::hdrSmpteSt209450"};
+        }
+
         case Feature::hdrVivid: {
             auto vk_struct = const_cast<VkPhysicalDeviceHdrVividFeaturesHUAWEI*>(
                 vku::FindStructInPNextChain<VkPhysicalDeviceHdrVividFeaturesHUAWEI>(*inout_pnext_chain));
@@ -4337,6 +4352,21 @@ FeatureAndName AddFeature(APIVersion api_version, vkt::Feature feature, void** i
                 }
             }
             return {&vk_struct->maintenance11, "VkPhysicalDeviceMaintenance11FeaturesKHR::maintenance11"};
+        }
+
+        case Feature::maintenance12: {
+            auto vk_struct = const_cast<VkPhysicalDeviceMaintenance12FeaturesKHR*>(
+                vku::FindStructInPNextChain<VkPhysicalDeviceMaintenance12FeaturesKHR>(*inout_pnext_chain));
+            if (!vk_struct) {
+                vk_struct = new VkPhysicalDeviceMaintenance12FeaturesKHR;
+                *vk_struct = vku::InitStructHelper();
+                if (*inout_pnext_chain) {
+                    vvl::PnextChainAdd(*inout_pnext_chain, vk_struct);
+                } else {
+                    *inout_pnext_chain = vk_struct;
+                }
+            }
+            return {&vk_struct->maintenance12, "VkPhysicalDeviceMaintenance12FeaturesKHR::maintenance12"};
         }
 
         case Feature::maintenance4:

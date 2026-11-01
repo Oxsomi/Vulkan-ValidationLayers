@@ -348,7 +348,7 @@ void CommandBufferSubState::RecordCopyBufferCommon(vvl::Buffer& src_buffer_state
                                                 vk_memory);
                     const std::string dbg_region_name = vvl::CommandBuffer::GetDebugRegionName(
                         base.GetLabelCommands(), label_command_i, submission.cb_infos[cb_index].initial_label_stack);
-                    const Location loc_with_dbg_region(loc, dbg_region_name);
+                    const Location loc_with_dbg_region(loc, dbg_region_name, submission.loc.Get().frame_id);
                     const bool is_2 = loc.function == vvl::Func::vkCmdCopyBuffer2 || loc.function == vvl::Func::vkCmdCopyBuffer2KHR;
                     const char* vuid = is_2 ? "VUID-VkCopyBufferInfo2-pRegions-00117" : "VUID-vkCmdCopyBuffer-pRegions-00117";
                     skip |= validator.LogError(
@@ -535,10 +535,12 @@ void CommandBufferSubState::RecordClearAttachments(uint32_t attachment_count, co
                 auto val_fn = [this, rect_count, clear_rect_copy, loc](const vvl::CommandBuffer& secondary,
                                                                        const vvl::CommandBuffer* prim_cb, const vvl::Framebuffer*) {
                     assert(rect_count == clear_rect_copy->size());
-                    return validator.ValidateClearAttachmentExtent(
-                        secondary, prim_cb->render_area,
-                        prim_cb->active_render_pass->dynamic_rendering_begin_rendering_info.layerCount, rect_count,
-                        clear_rect_copy->data(), loc);
+                    if (!prim_cb->IsPrimary()) {
+                        return false;  // When nested in another secondary, the renderArea/layerCount are not known yet
+                    }
+                    return validator.ValidateClearAttachmentExtent(secondary, prim_cb->render_area,
+                                                                   prim_cb->active_render_pass->GetDynamicRenderingLayerCount(),
+                                                                   rect_count, clear_rect_copy->data(), loc);
                 };
                 cmd_execute_commands_functions.emplace_back(val_fn);
             }

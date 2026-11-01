@@ -274,6 +274,8 @@ std::string CommandBuffer::DescriptorHeap::Describe(bool is_sampler) const {
 // To "properly" do this, we would need to really divide LastBound state into 3 structs for each
 // For the practical future, we will try and get away just assuming these crazy cases are not happening
 void CommandBuffer::SetDescriptorMode(vvl::DescriptorMode new_mode, vvl::Func function) {
+    last_used_descriptor_mode = new_mode;
+
     // 99% of time, all LastBound will be the same mode
     bool reset_heap = false;
     bool reset_buffer = false;
@@ -307,6 +309,7 @@ void CommandBuffer::SetDescriptorMode(vvl::DescriptorMode new_mode, vvl::Func fu
 // So calling it doesn't "set" a mode, but instead only "invalidates"
 void CommandBuffer::InvalidateDescriptorMode(vvl::DescriptorMode invalidate_mode, vvl::DescriptorMode new_mode,
                                              vvl::Func function) {
+    last_used_descriptor_mode = new_mode;
     for (uint32_t i = 0; i < vvl::BindPointCount; i++) {
         const vvl::DescriptorMode current_mode = lastBound[i].GetDescriptorMode();
         if (current_mode == invalidate_mode) {
@@ -628,16 +631,20 @@ void CommandBuffer::RecordWriteTimestamp(VkQueryPool queryPool, uint32_t slot, c
         AddChild(pool_state);
     }
 
-    QueryObject query_obj = {queryPool, slot};
-    for (auto& item : sub_states_) {
-        item.second->RecordWriteTimestamp(query_obj, loc);
-    }
+    // With multiview, the timestamp uses N consecutive queries
+    const QueryCount query_count(*this);
+    for (uint32_t i = 0; i < query_count.count; ++i) {
+        QueryObject query_obj = {queryPool, slot + i};
+        for (auto& item : sub_states_) {
+            item.second->RecordWriteTimestamp(query_obj, loc);
+        }
 
-    // Acts like an end query
-    active_queries.erase(query_obj);
-    updated_queries.insert(query_obj);
-    if (query_obj.inside_render_pass) {
-        render_pass_queries.erase(query_obj);
+        // Acts like an end query
+        active_queries.erase(query_obj);
+        updated_queries.insert(query_obj);
+        if (query_obj.inside_render_pass) {
+            render_pass_queries.erase(query_obj);
+        }
     }
 }
 
@@ -1576,6 +1583,7 @@ void CommandBuffer::RecordExecuteCommands(vvl::span<const VkCommandBuffer> secon
                     void update(ImageLayoutState& dst, const ImageLayoutState& src) const {
                         if (src.current_layout != kInvalidLayout && src.current_layout != dst.current_layout) {
                             dst.current_layout = src.current_layout;
+                            dst.current_layout_command = src.current_layout_command;
                         }
                     }
                     std::optional<ImageLayoutState> insert(const ImageLayoutState& src) const {
@@ -1727,9 +1735,13 @@ void CommandBuffer::RecordBindPipeline(VkPipelineBindPoint bind_point, vvl::Pipe
         }
 
         if (!pipeline.IsDynamic(CB_DYNAMIC_STATE_VERTEX_INPUT_EXT) &&
-            !pipeline.IsDynamic(CB_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE) && pipeline.vertex_input_state) {
-            for (const auto& [binding_index, binding_state] : pipeline.vertex_input_state->bindings) {
-                current_vertex_buffer_binding_info[binding_index].stride = binding_state.desc.stride;
+            !pipeline.IsDynamic(CB_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE)) {
+            stride_set_with_bind_vertex_buffer_3 = false;
+
+            if (pipeline.vertex_input_state) {
+                for (const auto& [binding_index, binding_state] : pipeline.vertex_input_state->bindings) {
+                    current_vertex_buffer_binding_info[binding_index].stride = binding_state.desc.stride;
+                }
             }
         }
 

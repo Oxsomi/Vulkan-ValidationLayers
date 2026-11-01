@@ -857,9 +857,10 @@ bool CoreChecks::ValidateDrawDynamicStateVertex(const LastBound& last_bound_stat
                         skip |= LogError(
                             CreateActionVuid(loc.function, vvl::ActionVUID::VERTEX_INPUT_08734), vert_spirv_state.handle(), loc,
                             "vkCmdSetVertexInputEXT set pVertexAttributeDescriptions[%" PRIu32 "] (binding %" PRIu32
-                            ", location %" PRIu32 ") with format %s but the vertex shader %s is numeric type %s",
+                            ", location %" PRIu32 ") with format %s but the vertex shader %s is numeric type %s%s",
                             attrib->index, attrib->desc.binding, attrib->desc.location, string_VkFormat(attrib->desc.format),
-                            variable_ptr->Describe().c_str(), vert_spirv_state.DescribeType(var_base_type_id).c_str());
+                            variable_ptr->Describe().c_str(), vert_spirv_state.DescribeType(var_base_type_id).c_str(),
+                            shader64 ? "" : "\nHint: This can be allowed if the legacyVertexAttributes feature is enabled.");
                     }
                 } else if (attribute64 && !shader64) {
                     skip |= LogError(
@@ -1185,7 +1186,9 @@ bool CoreChecks::ValidateDrawDynamicStateValue(const LastBound& last_bound_state
         // The VU might "seem" like its not for dynamic, but if not using VK_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT this check
         // is picked up by VUID-VkGraphicsPipelineCreateInfo-multisampledRenderToSingleSampled-06853 and
         // VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285 already
-        if (!IsMixSamplingSupported() && last_bound_state.IsDynamic(CB_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT)) {
+        // After vkCmdBeginCustomResolveEXT the draws write the resolve attachments, as in the static pipeline check
+        if (!IsMixSamplingSupported() && last_bound_state.IsDynamic(CB_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT) &&
+            !core::SubState(cb_state).custom_resolve.started) {
             const VkSampleCountFlagBits rasterization_samples = cb_state.dynamic_state_value.rasterization_samples;
             for (uint32_t i = 0; i < cb_state.active_attachments.size(); ++i) {
                 const auto& attachment_info = cb_state.active_attachments[i];
@@ -1304,9 +1307,9 @@ bool CoreChecks::ValidateDrawDynamicStateValue(const LastBound& last_bound_state
                         has_pipeline ? vvl::ActionVUID::SET_VIEWPORT_SWIZZLE_07493 : vvl::ActionVUID::SET_VIEWPORT_SWIZZLE_09421;
                     skip |= LogError(CreateActionVuid(loc.function, vuid), cb_state.Handle(), loc,
                                      "viewportCount (%" PRIu32
-                                     ") set with vkCmdSetViewportWithCount is greater than viewportCount (%" PRIu32 ") set with %s",
-                                     cb_state.dynamic_state_value.viewport_count, viewport_swizzle_count,
-                                     has_pipeline ? "VkPipelineViewportSwizzleStateCreateInfoNV" : "vkCmdSetViewportSwizzleNV");
+                                     ") set with vkCmdSetViewportWithCount is greater than viewportCount (%" PRIu32
+                                     ") set with vkCmdSetViewportSwizzleNV",
+                                     cb_state.dynamic_state_value.viewport_count, viewport_swizzle_count);
                 }
             } else if (auto viewport_state = last_bound_state.pipeline_state->ViewportState()) {
                 // Only applies when the pipeline actually chained the struct, otherwise there is no per-viewport swizzle array
@@ -1938,10 +1941,8 @@ bool CoreChecks::ValidateCmdSetPatchControlPoints(VkCommandBuffer commandBuffer,
     } else if (patchControlPoints > phys_dev_props.limits.maxTessellationPatchSize) {
         const char* vuid = "VUID-vkCmdSetPatchControlPointsEXT-patchControlPoints-04874";
         skip |= LogError(vuid, commandBuffer, error_obj.location.dot(Field::patchControlPoints),
-                         "(%" PRIu32
-                         ") must be less than "
-                         "maxTessellationPatchSize (%" PRIu32 ")",
-                         patchControlPoints, phys_dev_props.limits.maxTessellationPatchSize);
+                         "(%" PRIu32 ") must not be greater than maxTessellationPatchSize (%" PRIu32 ")", patchControlPoints,
+                         phys_dev_props.limits.maxTessellationPatchSize);
     }
     return skip;
 }

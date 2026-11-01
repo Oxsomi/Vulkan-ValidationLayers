@@ -1109,8 +1109,8 @@ const std::vector<Entry>& GetQueueCapErrors() {
         {Key(Func::vkCmdWriteTimestamp, Field::pipelineStage), "VUID-vkCmdWriteTimestamp-pipelineStage-04074"},
         {Key(Struct::VkSubpassDependency2, Field::srcStageMask), "VUID-vkCmdBeginRenderPass2-srcStageMask-06453"},
         {Key(Struct::VkSubpassDependency2, Field::dstStageMask), "VUID-vkCmdBeginRenderPass2-dstStageMask-06454"},
-        {Key(Func::vkCmdSetEvent, Field::srcStageMask), "VUID-vkCmdSetEvent2-srcStageMask-03827"},
-        {Key(Func::vkCmdSetEvent, Field::dstStageMask), "VUID-vkCmdSetEvent2-dstStageMask-03828"},
+        {Key(Func::vkCmdSetEvent2, Field::srcStageMask), "VUID-vkCmdSetEvent2-srcStageMask-03827"},
+        {Key(Func::vkCmdSetEvent2, Field::dstStageMask), "VUID-vkCmdSetEvent2-dstStageMask-03828"},
         {Key(Func::vkCmdPipelineBarrier2, Struct::VkMemoryBarrier2, Field::srcStageMask),
          "VUID-vkCmdPipelineBarrier2-srcStageMask-09673"},
         {Key(Func::vkCmdPipelineBarrier2, Struct::VkMemoryBarrier2, Field::dstStageMask),
@@ -1228,12 +1228,24 @@ static const vvl::unordered_map<QueueError, std::vector<Entry>>& GetBarrierQueue
 
 const vvl::unordered_map<QueueError, std::string>& GetQueueErrorSummaryMap() {
     static const vvl::unordered_map<QueueError, std::string> kQueueErrorSummary{
-        {QueueError::kSrcNoExternalExt, "Source queue family must not be VK_QUEUE_FAMILY_EXTERNAL."},
-        {QueueError::kDstNoExternalExt, "Destination queue family must not be VK_QUEUE_FAMILY_EXTERNAL."},
-        {QueueError::kSrcNoForeignExt, "Source queue family must not be VK_QUEUE_FAMILY_FOREIGN_EXT."},
-        {QueueError::kDstNoForeignExt, "Destination queue family must not be VK_QUEUE_FAMILY_FOREIGN_EXT."},
-        {QueueError::kSync1ConcurrentSrc, "Source queue family must be VK_QUEUE_FAMILY_IGNORED or VK_QUEUE_FAMILY_EXTERNAL."},
-        {QueueError::kSync1ConcurrentDst, "Destination queue family must be VK_QUEUE_FAMILY_IGNORED or VK_QUEUE_FAMILY_EXTERNAL."},
+        {QueueError::kSrcNoExternalExt,
+         "Source queue family must not be VK_QUEUE_FAMILY_EXTERNAL.\nHint: This can be allowed if VK_KHR_external_memory "
+         "(or Vulkan 1.1) is enabled."},
+        {QueueError::kDstNoExternalExt,
+         "Destination queue family must not be VK_QUEUE_FAMILY_EXTERNAL.\nHint: This can be allowed if VK_KHR_external_memory "
+         "(or Vulkan 1.1) is enabled."},
+        {QueueError::kSrcNoForeignExt,
+         "Source queue family must not be VK_QUEUE_FAMILY_FOREIGN_EXT.\nHint: This can be allowed if VK_EXT_queue_family_foreign "
+         "is enabled."},
+        {QueueError::kDstNoForeignExt,
+         "Destination queue family must not be VK_QUEUE_FAMILY_FOREIGN_EXT.\nHint: This can be allowed if "
+         "VK_EXT_queue_family_foreign is enabled."},
+        {QueueError::kSync1ConcurrentSrc,
+         "Source queue family must be VK_QUEUE_FAMILY_IGNORED or VK_QUEUE_FAMILY_EXTERNAL.\nHint: This can be allowed if the "
+         "synchronization2 feature is enabled."},
+        {QueueError::kSync1ConcurrentDst,
+         "Destination queue family must be VK_QUEUE_FAMILY_IGNORED or VK_QUEUE_FAMILY_EXTERNAL.\nHint: This can be allowed if "
+         "the synchronization2 feature is enabled."},
         {QueueError::kExclusiveSrc, "Source queue family must be valid when using VK_SHARING_MODE_EXCLUSIVE."},
         {QueueError::kExclusiveDst, "Destination queue family must be valid when using VK_SHARING_MODE_EXCLUSIVE."},
     };

@@ -25,6 +25,7 @@
 #include "sync/sync_validation.h"
 #include "sync/sync_event.h"
 #include "sync/sync_image.h"
+#include "sync/sync_queue_command.h"
 #include "state_tracker/buffer_state.h"
 #include "state_tracker/ray_tracing_state.h"
 #include "state_tracker/render_pass_state.h"
@@ -136,7 +137,7 @@ void SyncValidator::ApplySignalsUpdate(SignalsUpdate& update, const BatchContext
         stats.AddTimelineSignals((uint32_t)new_signals.size());
 
         // Update host sync points
-        std::deque<TimelineHostSyncPoint>& host_sync_points = host_waitable_semaphores_[semaphore];
+        std::deque<TimelineHostSyncPoint>& host_sync_points = host_waitable_semaphores_[semaphore].sync_points;
         for (SignalInfo& new_signal : new_signals) {
             if (new_signal.batch) {
                 // The lifetimes of the semaphore host sync points are managed by vkWaitSemaphores.
@@ -153,8 +154,9 @@ void SyncValidator::ApplySignalsUpdate(SignalsUpdate& update, const BatchContext
                 TimelineHostSyncPoint sync_point;
                 assert(new_signal.first_scope.queue != kQueueIdInvalid);
                 sync_point.queue_id = new_signal.first_scope.queue;
-                sync_point.tag = new_signal.batch->GetTagRange().end - 1;
+                sync_point.tag = new_signal.batch->GetTagRange().end;
                 sync_point.timeline_value = new_signal.timeline_value;
+                sync_point.queue_sync_tags = new_signal.batch->GetQueueSyncTags();
                 host_sync_points.emplace_back(sync_point);
             }
         }
@@ -179,6 +181,8 @@ void SyncValidator::ApplySignalsUpdate(SignalsUpdate& update, const BatchContext
     EnsureTimelineSignalsLimit(kMaxTimelineSignalsPerQueue);
 }
 
+// TODO: Account for semaphore stage scopes during host-wait cleanup.
+// Using only queue tag limits can discard accesses outside a signal's scope
 void SyncValidator::ApplyTaggedWait(QueueId queue_id, ResourceUsageTag tag,
                                     const LastSynchronizedPresent& last_synchronized_present,
                                     const std::vector<ResourceUsageTag>& queue_sync_tags) {
@@ -197,7 +201,10 @@ void SyncValidator::ApplyTaggedWait(QueueId queue_id, ResourceUsageTag tag,
         sync_points.reserve(queue_id_limit_);
         for (const auto [sync_queue, sync_tag] : vvl::enumerate(queue_sync_tags)) {
             if (sync_tag > 0) {
-                sync_points.emplace_back((QueueId)sync_queue, sync_tag);
+                // Queue sync tag is an exclusive limit (the first unsynchronized tag).
+                // The wait predicate is inclusive, so exclude the boundary tag
+                const ResourceUsageTag last_synchronized_tag = sync_tag - 1;
+                sync_points.emplace_back((QueueId)sync_queue, last_synchronized_tag);
             }
         }
     }
@@ -266,21 +273,29 @@ void SyncValidator::WaitForFence(VkFence fence) {
 }
 
 void SyncValidator::WaitForSemaphore(VkSemaphore semaphore, uint64_t value) {
-    std::deque<TimelineHostSyncPoint>* sync_points = vvl::Find(host_waitable_semaphores_, semaphore);
-    if (!sync_points) {
+    TimelineHostSyncState* host_sync_state = vvl::Find(host_waitable_semaphores_, semaphore);
+    if (!host_sync_state) {
         return;
     }
+
+    // An imported payload replaces the value synchronized_value was derived from
+    const auto semaphore_state = Get<vvl::Semaphore>(semaphore);
+    const bool imported = semaphore_state && semaphore_state->ImportedHandleType().has_value();
+
+    if (!imported && value <= host_sync_state->synchronized_value) {
+        return;
+    }
+    auto& sync_points = host_sync_state->sync_points;
     auto matching_sync_point = [value](const TimelineHostSyncPoint& sync_point) { return sync_point.timeline_value >= value; };
-    auto sync_point_it = std::find_if(sync_points->begin(), sync_points->end(), matching_sync_point);
-    if (sync_point_it == sync_points->end()) {
+    auto sync_point_it = std::find_if(sync_points.begin(), sync_points.end(), matching_sync_point);
+    if (sync_point_it == sync_points.end()) {
         return;
     }
 
     const TimelineHostSyncPoint& sync_point = *sync_point_it;
     const QueueState& queue_state = GetQueueState(sync_point.queue_id);
 
-    // TODO: specify queue sync tags argument similar to WaitForFence
-    ApplyTaggedWait(sync_point.queue_id, sync_point.tag, queue_state.GetLastSynchronizedPresent(), {});
+    ApplyTaggedWait(sync_point.queue_id, sync_point.tag, queue_state.GetLastSynchronizedPresent(), sync_point.queue_sync_tags);
 
     // Remove signals before the resolving one (keep the resolving signal).
     std::vector<SignalInfo>& signals = timeline_signals_[semaphore];
@@ -290,10 +305,12 @@ void SyncValidator::WaitForSemaphore(VkSemaphore semaphore, uint64_t value) {
     });
     stats.RemoveTimelineSignals(uint32_t(initial_signal_count - signals.size()));
 
-    // We can remove all sync points that are in the scope of current wait.
-    // Subsequent attempts to synchronize on the host with already synchronized
-    // timeline values will result in noop.
-    sync_points->erase(sync_points->begin(), sync_point_it + 1 /* include resolving sync point too*/);
+    // Remember the resolving signal value, which can be greater than the requested wait value
+    host_sync_state->synchronized_value = sync_point.timeline_value;
+
+    // Remove the resolving sync point and all preceding points.
+    // For non-imported semaphores, synchronized_value makes later waits for these values no-ops
+    sync_points.erase(sync_points.begin(), sync_point_it + 1 /* include resolving sync point too*/);
 }
 
 void SyncValidator::UpdateSyncImageMemoryBindState(uint32_t count, const VkBindImageMemoryInfo* infos) {
@@ -308,6 +325,24 @@ void SyncValidator::UpdateSyncImageMemoryBindState(uint32_t count, const VkBindI
         if (sub_state.IsTiled()) {
             sub_state.SetOpaqueBaseAddress(*device_state);
         }
+    }
+}
+
+bool SyncValidator::ProcessQueueCommand(QueueCommand&& command) {
+    if (retire_mode_) {
+        queue_commands_.push_back(std::move(command));
+        return false;
+    }
+    return ExecuteQueueCommand(command, *this);
+}
+
+void SyncValidator::ExecuteQueueCommands() {
+    while (!queue_commands_.empty()) {
+        if (!IsQueueCommandReady(queue_commands_.front())) {
+            break;
+        }
+        ExecuteQueueCommand(queue_commands_.front(), *this);
+        queue_commands_.pop_front();
     }
 }
 
@@ -500,13 +535,17 @@ bool SyncValidator::PreCallValidateCmdPipelineBarrier(
 void SyncValidator::RecordCmdPipelineBarrier(CommandBufferContext& cb_context, BarrierSet&& barrier_set,
                                              const Location& loc) const {
     const ResourceUsageTag tag = cb_context.NextCommandTag(loc.function);
+    const uint32_t barrier_set_index = static_cast<uint32_t>(cb_context.GetCommandData().barrier_sets.size());
+    bool has_layout_transition = false;
     for (const SyncBufferBarrier& buffer_barrier : barrier_set.buffer_barriers) {
         cb_context.AddCommandHandle(tag, buffer_barrier.buffer->Handle());
     }
     for (SyncImageBarrier& image_barrier : barrier_set.image_barriers) {
-        if (image_barrier.layout_transition) {
-            const ResourceUsageTagEx tag_ex = cb_context.AddCommandHandle(tag, image_barrier.image->Handle());
+        if (image_barrier.IsLayoutTransition()) {
+            const ResourceUsageTagEx tag_ex =
+                cb_context.AddCommandHandleIndexed(tag, image_barrier.image->Handle(), barrier_set_index);
             image_barrier.handle_index = tag_ex.handle_index;
+            has_layout_transition = true;
         }
     }
     const BarrierCommand command{barrier_set};
@@ -514,7 +553,11 @@ void SyncValidator::RecordCmdPipelineBarrier(CommandBufferContext& cb_context, B
         AccessContext& access_context = cb_context.GetCurrentAccessContext();
         command.Apply(cb_context.GetSyncEnvironment(), tag, access_context);
     }
-    cb_context.StoreCommand(tag, command);
+    if (cb_context.NeedsCommandStorage()) {
+        cb_context.StoreCommand(tag, command);
+    } else if (has_layout_transition) {
+        cb_context.StoreBarriersForReporting(vvl::make_span<const BarrierSet>(&barrier_set, 1));
+    }
 }
 
 void SyncValidator::PostCallRecordCmdPipelineBarrier(
@@ -611,6 +654,7 @@ void SyncValidator::FinishDeviceSetup(const VkDeviceCreateInfo* pCreateInfo, con
 
 void SyncValidator::PreCallRecordDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAllocator,
                                                const RecordObject& record_obj) {
+    queue_commands_.clear();
     queue_states_.clear();
     binary_signals_.clear();
     timeline_signals_.clear();
@@ -625,15 +669,20 @@ void SyncValidator::PostCallRecordCreateSemaphore(VkDevice device, const VkSemap
         return;
     }
     assert(!vvl::Contains(timeline_signals_, *pSemaphore));
+
+    if (auto sem_state = Get<vvl::Semaphore>(*pSemaphore); sem_state && sem_state->type == VK_SEMAPHORE_TYPE_TIMELINE) {
+        host_waitable_semaphores_[*pSemaphore].synchronized_value = sem_state->initial_value;
+    }
 }
 
 void SyncValidator::PreCallRecordDestroySemaphore(VkDevice device, VkSemaphore semaphore, const VkAllocationCallbacks* pAllocator,
                                                   const RecordObject& record_obj) {
-    if (auto sem_state = Get<vvl::Semaphore>(semaphore); sem_state && (sem_state->type == VK_SEMAPHORE_TYPE_TIMELINE)) {
+    if (auto sem_state = Get<vvl::Semaphore>(semaphore); sem_state && sem_state->type == VK_SEMAPHORE_TYPE_TIMELINE) {
         if (auto it = timeline_signals_.find(semaphore); it != timeline_signals_.end()) {
             stats.RemoveTimelineSignals((uint32_t)it->second.size());
             timeline_signals_.erase(it);
         }
+        host_waitable_semaphores_.erase(semaphore);
     }
 }
 
@@ -1850,18 +1899,7 @@ void SyncValidator::PostCallRecordResetEvent(VkDevice device, VkEvent event, con
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    if (auto event_state = Get<vvl::Event>(event)) {
-        const auto all_batches = GetAllQueueBatchContexts();
-        for (const auto& batch : all_batches) {
-            SyncEventsContext& events_context = batch->GetEventsContext();
-            if (SyncEventState* sync_event = events_context.GetFromShared(event_state)) {
-                sync_event->last_command = record_obj.location.function;
-                sync_event->unsynchronized_set = vvl::Func::Empty;
-                sync_event->ResetFirstScope();
-                sync_event->barriers = 0;
-            }
-        }
-    }
+    ProcessQueueCommand(HostResetEventCommand{event});
 }
 
 bool SyncValidator::PreCallValidateCmdSetEvent(VkCommandBuffer commandBuffer, VkEvent event, VkPipelineStageFlags stageMask,
@@ -2069,18 +2107,27 @@ bool SyncValidator::PreCallValidateCmdWaitEvents(VkCommandBuffer commandBuffer, 
 void SyncValidator::RecordCmdWaitEvents(CommandBufferContext& cb_context, std::vector<std::shared_ptr<const vvl::Event>>&& events,
                                         std::vector<BarrierSet>&& barrier_sets, const Location& loc) const {
     const ResourceUsageTag tag = cb_context.NextCommandTag(loc.function);
+    uint32_t barrier_set_index = static_cast<uint32_t>(cb_context.GetCommandData().barrier_sets.size());
+    bool has_layout_transition = false;
     for (BarrierSet& barrier_set : barrier_sets) {
         for (SyncImageBarrier& image_barrier : barrier_set.image_barriers) {
-            if (image_barrier.layout_transition) {
-                image_barrier.handle_index = cb_context.AddCommandHandle(tag, image_barrier.image->Handle()).handle_index;
+            if (image_barrier.IsLayoutTransition()) {
+                image_barrier.handle_index =
+                    cb_context.AddCommandHandleIndexed(tag, image_barrier.image->Handle(), barrier_set_index).handle_index;
+                has_layout_transition = true;
             }
         }
+        ++barrier_set_index;
     }
     const WaitEventsCommand command{events, barrier_sets, loc.function};
     if (syncval_settings.record_time_validation) {
         command.Apply(cb_context.GetSyncEnvironment(), tag, cb_context.GetCurrentAccessContext());
     }
-    cb_context.StoreCommand(tag, command);
+    if (cb_context.NeedsCommandStorage()) {
+        cb_context.StoreCommand(tag, command);
+    } else if (has_layout_transition) {
+        cb_context.StoreBarriersForReporting(barrier_sets);
+    }
 }
 
 void SyncValidator::PostCallRecordCmdWaitEvents(VkCommandBuffer commandBuffer, uint32_t eventCount, const VkEvent* pEvents,
@@ -2186,9 +2233,9 @@ bool SyncValidator::PreCallValidateCmdExecuteCommands(VkCommandBuffer commandBuf
     // Make working copies of the access and events contexts
     for (uint32_t cb_index = 0; cb_index < commandBufferCount; ++cb_index) {
         if (cb_index == 0) {
-            proxy_cb_context.NextCommandTag(error_obj.location.function, SubCommandType::kIndex);
+            proxy_cb_context.NextCommandTag(error_obj.location.function);
         } else {
-            proxy_cb_context.NextSubCommandTag(error_obj.location.function, SubCommandType::kIndex);
+            proxy_cb_context.NextSubCommandTag(error_obj.location.function, SubCommandType::kNone);
         }
 
         const auto recorded_cb = Get<vvl::CommandBuffer>(pCommandBuffers[cb_index]);
@@ -2239,49 +2286,17 @@ void SyncValidator::PostCallRecordBindImageMemory2KHR(VkDevice device, uint32_t 
 }
 
 void SyncValidator::PostCallRecordQueueWaitIdle(VkQueue queue, const RecordObject& record_obj) {
-    if (record_obj.result != VK_SUCCESS || !syncval_settings.full_validation || queue == VK_NULL_HANDLE) {
+    if (!syncval_settings.full_validation) {
         return;
     }
-    const QueueId waited_queue = GetQueueId(queue);
-    if (waited_queue == kQueueIdInvalid) {
+    if (record_obj.result != VK_SUCCESS || queue == VK_NULL_HANDLE) {
         return;
     }
-    const QueueState& queue_state = GetQueueState(waited_queue);
-    ApplyTaggedWait(waited_queue, ResourceUsageRecord::kMaxIndex, queue_state.GetLastSynchronizedPresent(), {});
-
-    // For each timeline, remove all signals signaled on the waited queue, except the last one.
-    // The last signal is needed to represent the current timeline state.
-    EnsureTimelineSignalsLimit(1, waited_queue);
-
-    // Eliminate host waitable objects from the current queue.
-    vvl::EraseIf(waitable_fences_, [waited_queue](const auto& sf) { return sf.second.queue_id == waited_queue; });
-    for (auto& [semaphore, sync_points] : host_waitable_semaphores_) {
-        vvl::EraseIf(sync_points, [waited_queue](const auto& sync_point) { return sync_point.queue_id == waited_queue; });
-    }
+    ProcessQueueCommand(QueueWaitIdleCommand{queue});
 }
 
 void SyncValidator::PostCallRecordDeviceWaitIdle(VkDevice device, const RecordObject& record_obj) {
-    const auto batches = GetAllQueueBatchContexts();
-
-    // Collect information about last synchronized present over all queues
-    LastSynchronizedPresent global_last_synchronized_present;
-    for (const auto& batch : batches) {
-        global_last_synchronized_present.Merge(batch->last_synchronized_present);
-    }
-
-    // Device wait will preserve unsynchronized present operations.
-    for (const auto& batch : batches) {
-        batch->ApplyDeviceWait(global_last_synchronized_present);
-    }
-
-    // For each timeline keep only the last signal per queue.
-    // The last signal is needed to represent the current timeline state.
-    EnsureTimelineSignalsLimit(1);
-
-    // Cleanup fence waits associated with queues. Acquire fence waits are preserved
-    auto is_queue_fence = [](const auto& waitable) { return waitable.second.queue_id != kQueueIdInvalid; };
-    vvl::EraseIf(waitable_fences_, is_queue_fence);
-    host_waitable_semaphores_.clear();
+    ProcessQueueCommand(DeviceWaitIdleCommand{});
 }
 
 bool SyncValidator::PreCallValidateQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo,
@@ -2663,7 +2678,7 @@ void SyncValidator::PostCallRecordGetFenceStatus(VkDevice device, VkFence fence,
     }
     if (record_obj.result == VK_SUCCESS) {
         // fence is signalled, mark it as waited for
-        WaitForFence(fence);
+        ProcessQueueCommand(WaitForFenceCommand{fence});
     }
 }
 
@@ -2675,7 +2690,7 @@ void SyncValidator::PostCallRecordWaitForFences(VkDevice device, uint32_t fenceC
     if ((record_obj.result == VK_SUCCESS) && ((VK_TRUE == waitAll) || (1 == fenceCount))) {
         // We can only know the pFences have signal if we waited for all of them, or there was only one of them
         for (uint32_t i = 0; i < fenceCount; i++) {
-            WaitForFence(pFences[i]);
+            ProcessQueueCommand(WaitForFenceCommand{pFences[i]});
         }
     }
 }
@@ -2688,40 +2703,16 @@ bool SyncValidator::PreCallValidateSignalSemaphore(VkDevice device, const VkSema
     }
     // Although SignalSemaphore does not run on the queue, the signalling can resolve
     // previously submitted batches that are waiting for this signal, and this will
-    // initiate validation that touches queue state. That's why queue mutex is used here.
+    // initiate validation that touches queue state. That's why queue mutex is used here
     std::lock_guard lock_guard(queue_mutex_);
-    skip |= const_cast<SyncValidator*>(this)->ProcessSignalSemaphore(device, pSignalInfo);
+    SignalSemaphoreCommand command{pSignalInfo->semaphore, pSignalInfo->value};
+    skip |= const_cast<SyncValidator*>(this)->ProcessQueueCommand(std::move(command));
     return skip;
 }
 
 bool SyncValidator::PreCallValidateSignalSemaphoreKHR(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo,
                                                       const ErrorObject& error_obj) const {
     return PreCallValidateSignalSemaphore(device, pSignalInfo, error_obj);
-}
-
-bool SyncValidator::ProcessSignalSemaphore(VkDevice device, const VkSemaphoreSignalInfo* pSignalInfo) {
-    bool skip = false;
-
-    auto semaphore_state = Get<vvl::Semaphore>(pSignalInfo->semaphore);
-    if (!semaphore_state) {
-        return skip;
-    }
-
-    SignalsUpdate signals_update(*this);
-    std::vector<SignalInfo>& signals = signals_update.timeline_signals[pSignalInfo->semaphore];
-
-    // Reject invalid signal
-    if (!signals.empty() && pSignalInfo->value <= signals.back().timeline_value) {
-        return skip;  // [core validation check]: strictly increasing signal values
-    }
-
-    signals.emplace_back(SignalInfo(semaphore_state, pSignalInfo->value));
-    skip |= PropagateTimelineSignals(signals_update);
-
-    if (!skip) {
-        ApplySignalsUpdate(signals_update, nullptr);
-    }
-    return skip;
 }
 
 void SyncValidator::PostCallRecordWaitSemaphores(VkDevice device, const VkSemaphoreWaitInfo* pWaitInfo, uint64_t timeout,
@@ -2732,7 +2723,7 @@ void SyncValidator::PostCallRecordWaitSemaphores(VkDevice device, const VkSemaph
     const bool wait_all = pWaitInfo->semaphoreCount == 1 || (pWaitInfo->flags & VK_SEMAPHORE_WAIT_ANY_BIT) == 0;
     if (record_obj.result == VK_SUCCESS && wait_all) {
         for (uint32_t i = 0; i < pWaitInfo->semaphoreCount; i++) {
-            WaitForSemaphore(pWaitInfo->pSemaphores[i], pWaitInfo->pValues[i]);
+            ProcessQueueCommand(WaitForSemaphoreCommand{pWaitInfo->pSemaphores[i], pWaitInfo->pValues[i]});
         }
     }
 }
@@ -2748,7 +2739,7 @@ void SyncValidator::PostCallRecordGetSemaphoreCounterValue(VkDevice device, VkSe
         return;
     }
     if (record_obj.result == VK_SUCCESS) {
-        WaitForSemaphore(semaphore, *pValue);
+        ProcessQueueCommand(WaitForSemaphoreCommand{semaphore, *pValue});
     }
 }
 

@@ -99,7 +99,8 @@ bool Device::manual_PreCallValidateCmdBindVertexBuffers(VkCommandBuffer commandB
         if (pBuffers[i] == VK_NULL_HANDLE) {
             const Location buffer_loc = error_obj.location.dot(Field::pBuffers, i);
             if (!enabled_features.nullDescriptor) {
-                skip |= LogError("VUID-vkCmdBindVertexBuffers-pBuffers-04001", commandBuffer, buffer_loc, "is VK_NULL_HANDLE.");
+                skip |= LogError("VUID-vkCmdBindVertexBuffers-pBuffers-04001", commandBuffer, buffer_loc,
+                                 "is VK_NULL_HANDLE.\nHint: This can be allowed if the nullDescriptor feature is enabled.");
             } else {
                 if (pOffsets[i] != 0) {
                     skip |= LogError("VUID-vkCmdBindVertexBuffers-pBuffers-04002", commandBuffer, buffer_loc,
@@ -307,7 +308,8 @@ bool Device::manual_PreCallValidateCmdBindVertexBuffers2(VkCommandBuffer command
         if (pBuffers[i] == VK_NULL_HANDLE) {
             const Location buffer_loc = error_obj.location.dot(Field::pBuffers, i);
             if (!enabled_features.nullDescriptor) {
-                skip |= LogError("VUID-vkCmdBindVertexBuffers2-pBuffers-04111", commandBuffer, buffer_loc, "is VK_NULL_HANDLE.");
+                skip |= LogError("VUID-vkCmdBindVertexBuffers2-pBuffers-04111", commandBuffer, buffer_loc,
+                                 "is VK_NULL_HANDLE.\nHint: This can be allowed if the nullDescriptor feature is enabled.");
             } else if (pOffsets && pOffsets[i] != 0) {
                 skip |= LogError("VUID-vkCmdBindVertexBuffers2-pBuffers-04112", commandBuffer, buffer_loc,
                                  "is VK_NULL_HANDLE, but pOffsets[%" PRIu32 "] is not 0.", i);
@@ -1011,7 +1013,9 @@ bool Device::ValidateViewport(const VkViewport& viewport, VkCommandBuffer object
 
     if (!negative_height_enabled && !(viewport.height > 0.0f)) {
         height_healthy = false;
-        skip |= LogError("VUID-VkViewport-apiVersion-07917", object, loc.dot(Field::height), "(%f) is not greater than zero.",
+        skip |= LogError("VUID-VkViewport-apiVersion-07917", object, loc.dot(Field::height),
+                         "(%f) is not greater than zero.\nHint: This can be allowed in some cases if VK_KHR_maintenance1 (or "
+                         "Vulkan 1.1) is enabled.",
                          viewport.height);
     } else if (!(f_lte_u32_exact(fabsf(viewport.height), max_h) || f_lte_u32_direct(fabsf(viewport.height), max_h))) {
         height_healthy = false;
@@ -1072,12 +1076,18 @@ bool Device::ValidateViewport(const VkViewport& viewport, VkCommandBuffer object
     if (!IsExtEnabled(extensions.vk_ext_depth_range_unrestricted)) {
         // minDepth
         if (!(viewport.minDepth >= 0.0) || !(viewport.minDepth <= 1.0)) {
-            skip |= LogError("VUID-VkViewport-minDepth-01234", object, loc.dot(Field::minDepth), "is %f.", viewport.minDepth);
+            skip |=
+                LogError("VUID-VkViewport-minDepth-01234", object, loc.dot(Field::minDepth),
+                         "is %f.\nHint: Values outside [0.0, 1.0] can be allowed if VK_EXT_depth_range_unrestricted is enabled.",
+                         viewport.minDepth);
         }
 
         // maxDepth
         if (!(viewport.maxDepth >= 0.0) || !(viewport.maxDepth <= 1.0)) {
-            skip |= LogError("VUID-VkViewport-maxDepth-01235", object, loc.dot(Field::maxDepth), "is %f.", viewport.maxDepth);
+            skip |=
+                LogError("VUID-VkViewport-maxDepth-01235", object, loc.dot(Field::maxDepth),
+                         "is %f.\nHint: Values outside [0.0, 1.0] can be allowed if VK_EXT_depth_range_unrestricted is enabled.",
+                         viewport.maxDepth);
         }
     }
 
@@ -1148,9 +1158,10 @@ bool Device::manual_PreCallValidateBeginCommandBuffer(VkCommandBuffer commandBuf
             skip |= context.ValidateFlags(inheritance_loc.dot(Field::queryFlags), vvl::FlagBitmask::VkQueryControlFlagBits,
                                           AllVkQueryControlFlagBits, info.queryFlags, kOptionalFlags,
                                           "VUID-VkCommandBufferInheritanceInfo-queryFlags-00057");
-        } else {  // !inheritedQueries
-            skip |= context.ValidateReservedFlags(inheritance_loc.dot(Field::queryFlags), info.queryFlags,
-                                                  "VUID-VkCommandBufferInheritanceInfo-queryFlags-02788");
+        } else if (info.queryFlags != 0) {  // !inheritedQueries
+            skip |= LogError("VUID-VkCommandBufferInheritanceInfo-queryFlags-02788", commandBuffer,
+                             inheritance_loc.dot(Field::queryFlags), "is %s, but the inheritedQueries feature was not enabled.",
+                             string_VkQueryControlFlags(info.queryFlags).c_str());
         }
 
         if (enabled_features.pipelineStatisticsQuery) {
@@ -1158,9 +1169,11 @@ bool Device::manual_PreCallValidateBeginCommandBuffer(VkCommandBuffer commandBuf
                                           vvl::FlagBitmask::VkQueryPipelineStatisticFlagBits, AllVkQueryPipelineStatisticFlagBits,
                                           info.pipelineStatistics, kOptionalFlags,
                                           "VUID-VkCommandBufferInheritanceInfo-pipelineStatistics-02789");
-        } else {  // !pipelineStatisticsQuery
-            skip |= context.ValidateReservedFlags(inheritance_loc.dot(Field::pipelineStatistics), info.pipelineStatistics,
-                                                  "VUID-VkCommandBufferInheritanceInfo-pipelineStatistics-00058");
+        } else if (info.pipelineStatistics != 0) {  // !pipelineStatisticsQuery
+            skip |= LogError("VUID-VkCommandBufferInheritanceInfo-pipelineStatistics-00058", commandBuffer,
+                             inheritance_loc.dot(Field::pipelineStatistics),
+                             "is %s, but the pipelineStatisticsQuery feature was not enabled.",
+                             string_VkQueryPipelineStatisticFlags(info.pipelineStatistics).c_str());
         }
 
         if (const auto* conditional_rendering =

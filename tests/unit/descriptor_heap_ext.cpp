@@ -108,6 +108,54 @@ TEST_F(NegativeDescriptorHeapEXT, SamplerParameterSize) {
     }
 }
 
+TEST_F(NegativeDescriptorHeapEXT, DescriptorsOverlap) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+
+    const size_t buffer_desc_size = static_cast<size_t>(heap_props.bufferDescriptorSize);
+    std::vector<uint8_t> r_data(buffer_desc_size * 2);
+
+    vkt::Buffer buffer(*m_device, 256, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vkt::device_address);
+    const VkDeviceAddressRangeEXT address_range = buffer.AddressRange();
+
+    VkResourceDescriptorInfoEXT resource_infos[2];
+    resource_infos[0] = vku::InitStructHelper();
+    resource_infos[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resource_infos[0].data.pAddressRange = &address_range;
+    resource_infos[1] = vku::InitStructHelper();
+    resource_infos[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resource_infos[1].data.pAddressRange = &address_range;
+    {
+        VkHostAddressRangeEXT descriptors[2] = {{r_data.data(), buffer_desc_size}, {r_data.data(), buffer_desc_size}};
+        m_errorMonitor->SetDesiredError("VUID-vkWriteResourceDescriptorsEXT-pDescriptors-12532");
+        vk::WriteResourceDescriptorsEXT(device(), 2u, resource_infos, descriptors);
+        m_errorMonitor->VerifyFound();
+    }
+    {
+        VkHostAddressRangeEXT descriptors[2] = {{r_data.data(), buffer_desc_size},
+                                                {r_data.data() + buffer_desc_size - 1, buffer_desc_size}};
+        m_errorMonitor->SetDesiredError("VUID-vkWriteResourceDescriptorsEXT-pDescriptors-12532");
+        vk::WriteResourceDescriptorsEXT(device(), 2u, resource_infos, descriptors);
+        m_errorMonitor->VerifyFound();
+    }
+
+    const size_t sampler_size = static_cast<size_t>(heap_props.samplerDescriptorSize);
+    std::vector<uint8_t> s_data(sampler_size * 2);
+
+    const VkSamplerCreateInfo sampler_cis[2] = {SafeSaneSamplerCreateInfo(), SafeSaneSamplerCreateInfo()};
+    {
+        VkHostAddressRangeEXT descriptors[2] = {{s_data.data(), sampler_size}, {s_data.data(), sampler_size}};
+        m_errorMonitor->SetDesiredError("VUID-vkWriteSamplerDescriptorsEXT-pDescriptors-12531");
+        vk::WriteSamplerDescriptorsEXT(device(), 2u, sampler_cis, descriptors);
+        m_errorMonitor->VerifyFound();
+    }
+    {
+        VkHostAddressRangeEXT descriptors[2] = {{s_data.data() + sampler_size, sampler_size}, {s_data.data() + 1, sampler_size}};
+        m_errorMonitor->SetDesiredError("VUID-vkWriteSamplerDescriptorsEXT-pDescriptors-12531");
+        vk::WriteSamplerDescriptorsEXT(device(), 2u, sampler_cis, descriptors);
+        m_errorMonitor->VerifyFound();
+    }
+}
+
 TEST_F(NegativeDescriptorHeapEXT, SamplerParameterYCbCr) {
     TEST_DESCRIPTION("Validate vkWriteSamplerDescriptorsEXT with YCbCr conversion");
     AddRequiredFeature(vkt::Feature::samplerYcbcrConversion);
@@ -3239,6 +3287,38 @@ TEST_F(NegativeDescriptorHeapEXT, MappedStructLessThanMaxPushDataSize) {
     m_errorMonitor->VerifyFound();
 }
 
+TEST_F(NegativeDescriptorHeapEXT, MaxPushDataSizeLeadOffset) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+    if (heap_props.maxPushDataSize != 256) {
+        GTEST_SKIP() << "maxPushDataSize is not 256";
+    }
+
+    VkDescriptorSetAndBindingMappingEXT mappings[2];
+    mappings[0] = MakeSetAndBindingMappingEXT(0, 0);
+    mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_DATA_EXT;
+    mappings[0].sourceData.pushDataOffset = 0;
+    mappings[1] = MakeSetAndBindingMappingEXT(0, 1);
+    mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 2;
+    mapping_info.pMappings = mappings;
+
+    const char* cs_source = R"glsl(
+        #version 450
+        layout(local_size_x = 1) in;
+        layout(set = 0, binding = 0) uniform Input { layout(offset = 256) uvec4 a; } x;
+        layout(set = 0, binding = 1) buffer Output { uvec4 b; } y;
+        void main() {
+            y.b = x.a;
+        }
+    )glsl";
+
+    m_errorMonitor->SetDesiredError("VUID-VkPipelineShaderStageCreateInfo-pNext-11316");
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+    m_errorMonitor->VerifyFound();
+}
+
 TEST_F(NegativeDescriptorHeapEXT, MaxPushDataSizeShaderObject) {
     SetTargetApiVersion(VK_API_VERSION_1_2);
     AddRequiredExtensions(VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
@@ -6063,6 +6143,54 @@ TEST_F(NegativeDescriptorHeapEXT, ReadOnlyStorageBufferHlsl) {
     m_errorMonitor->VerifyFound();
 }
 
+TEST_F(NegativeDescriptorHeapEXT, NoMappingSamplers) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+    InitRenderTarget();
+
+    VkDescriptorSetAndBindingMappingEXT mappings[2];
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 2u;
+    mapping_info.pMappings = mappings;
+
+    {
+        mappings[0] = MakeSetAndBindingMappingEXT(0, 0, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT);
+        mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+        mappings[1] = MakeSetAndBindingMappingEXT(0, 1, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT);
+        mappings[1].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+
+        char const* cs_source = R"glsl(
+            #version 450
+            layout(set = 0, binding = 0) uniform texture2D tex;
+            layout(set = 0, binding = 1) uniform sampler sampl;
+            void main() {
+                vec4 color = texture(sampler2D(tex, sampl), vec2(0.5f));
+            }
+        )glsl";
+
+        m_errorMonitor->SetDesiredError("VUID-VkComputePipelineCreateInfo-flags-11312");
+        vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+        m_errorMonitor->VerifyFound();
+    }
+
+    {
+        // Should be VK_SPIRV_RESOURCE_TYPE_COMBINED_SAMPLED_IMAGE_BIT_EXT
+        mappings[0] = MakeSetAndBindingMappingEXT(0, 0, 1, VK_SPIRV_RESOURCE_TYPE_SAMPLED_IMAGE_BIT_EXT);
+        mappings[0].source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
+
+        char const* cs_source = R"glsl(
+            #version 450
+            layout(set = 0, binding = 0) uniform sampler2D tex;
+            void main() {
+                vec4 color = texelFetch(tex, ivec2(0), 0);
+            }
+        )glsl";
+
+        m_errorMonitor->SetDesiredError("VUID-VkComputePipelineCreateInfo-flags-11312");
+        vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_0, &mapping_info);
+        m_errorMonitor->VerifyFound();
+    }
+}
+
 TEST_F(NegativeDescriptorHeapEXT, ComputeShaderRecordMapping) {
     RETURN_IF_SKIP(InitBasicDescriptorHeap());
 
@@ -6242,4 +6370,61 @@ TEST_F(NegativeDescriptorHeapEXT, InputAttachmentReadOnly) {
         "Note: InputAttachments actually use READ_WRITE_IMAGE_BIT not READ_ONLY_IMAGE_BIT without NonWritable");
     vkt::HeapGraphicsPipelineEXT pipe(*this, stages, 2, nullptr, rp);
     m_errorMonitor->VerifyFound();
+}
+
+TEST_F(NegativeDescriptorHeapEXT, UntypedArrayLengthOnMappingSourceAddress) {
+    AddRequiredExtensions(VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME);
+    AddRequiredFeature(vkt::Feature::shaderUntypedPointers);
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+
+    const char* cs_source = R"(
+               OpCapability Shader
+               OpCapability UntypedPointersKHR
+               OpExtension "SPV_KHR_untyped_pointers"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %b
+               OpExecutionMode %main LocalSize 1 1 1
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %B Block
+               OpMemberDecorate %B 0 Offset 0
+               OpDecorate %b Binding 0
+               OpDecorate %b DescriptorSet 0
+       %void = OpTypeVoid
+          %4 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+          %B = OpTypeStruct %_runtimearr_uint
+        %ptr = OpTypeUntypedPointerKHR StorageBuffer
+          %b = OpUntypedVariableKHR %ptr StorageBuffer %B
+       %main = OpFunction %void None %4
+          %6 = OpLabel
+         %13 = OpUntypedArrayLengthKHR %uint %B %b 0
+               OpReturn
+               OpFunctionEnd
+    )";
+
+    VkDescriptorSetAndBindingMappingEXT mapping =
+        MakeZeroSetAndBindingMappingEXT(0, 0, VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT);
+    VkShaderDescriptorSetAndBindingMappingInfoEXT mapping_info = vku::InitStructHelper();
+    mapping_info.mappingCount = 1u;
+    mapping_info.pMappings = &mapping;
+    m_errorMonitor->SetDesiredError("VUID-VkPipelineShaderStageCreateInfo-pNext-11378");
+    vkt::HeapComputePipelineEXT pipe(*m_device, cs_source, SPV_ENV_VULKAN_1_3, &mapping_info, SPV_SOURCE_ASM);
+    m_errorMonitor->VerifyFound();
+}
+
+TEST_F(NegativeDescriptorHeapEXT, BindResourceHeapReservedRangeOverflow) {
+    RETURN_IF_SKIP(InitBasicDescriptorHeap());
+
+    vkt::Buffer heap_buffer(*m_device, 4096u, VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT, vkt::device_address);
+    VkBindHeapInfoEXT bind_info = vku::InitStructHelper();
+    bind_info.heapRange = heap_buffer.AddressRange();
+    bind_info.reservedRangeSize = std::max(heap_props.minResourceHeapReservedRange, VkDeviceSize(4096));
+    bind_info.reservedRangeOffset = 0u - bind_info.reservedRangeSize;
+
+    m_command_buffer.Begin();
+    m_errorMonitor->SetDesiredError("VUID-vkCmdBindResourceHeapEXT-pBindInfo-11232");
+    vk::CmdBindResourceHeapEXT(m_command_buffer, &bind_info);
+    m_errorMonitor->VerifyFound();
+    m_command_buffer.End();
 }

@@ -357,7 +357,8 @@ bool CoreChecks::PreCallValidateCmdCopyTensorARM(VkCommandBuffer commandBuffer, 
                                  "pDimensions[%" PRIu32 "] for srcTensor (%" PRIi64 ") and dstTensor (%" PRIi64 ") are different.",
                                  i, src_tensor_state.description.pDimensions[i], dst_tensor_state.description.pDimensions[i]);
                 } else {
-                    if (region.pExtent) {
+                    // pExtent has region.dimensionCount elements, which can differ from the tensors (09954)
+                    if (region.pExtent && i < region.dimensionCount) {
                         if (static_cast<int64_t>(region.pExtent[i]) != src_tensor_state.description.pDimensions[i]) {
                             skip |= LogError("VUID-VkCopyTensorInfoARM-pRegions-09689", src_objlist,
                                              copy_info_loc.dot(Field::pRegions).dot(Field::pExtent, i),
@@ -517,7 +518,7 @@ bool CoreChecks::ValidateProtectedTensor(const vvl::CommandBuffer& cb_state, con
     // if driver supports protectedNoFault the operation is valid, just has undefined values
     if ((!phys_dev_props_core11.protectedNoFault) && (cb_state.unprotected == true)) {
         const LogObjectList objlist(cb_state.Handle(), tensor_state.Handle());
-        skip |= LogError("VUID-vkCmdDispatchDataGraphARM-commandBuffer-09800", objlist, tensor_loc,
+        skip |= LogError("VUID-vkCmdDispatchDataGraphARM-commandBuffer-02707", objlist, tensor_loc,
                          "(%s) is a protected tensor, but command buffer (%s) is unprotected.%s",
                          FormatHandle(tensor_state).c_str(), FormatHandle(cb_state).c_str(), more_message);
     }

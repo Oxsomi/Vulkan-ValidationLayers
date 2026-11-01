@@ -382,14 +382,13 @@ TEST_F(NegativeFragmentShadingRate, FragmentDensityMapDuplicateReferences) {
     VkAttachmentReference ref_input = {4, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkAttachmentReference ref_color = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference ref_depth = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference ref_preserve = {3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference ref_fdm = {2, VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT};
 
     {
         // FDM in input attachments
         VkAttachmentReference ref_fail[2] = {ref_input, ref_fdm};
-        VkSubpassDescription subpass = {0, VK_PIPELINE_BIND_POINT_GRAPHICS, 2, ref_fail, 1, &ref_color, nullptr, &ref_depth,
-                                        1, &ref_preserve.attachment};
+        VkSubpassDescription subpass = {0,      VK_PIPELINE_BIND_POINT_GRAPHICS, 2, ref_fail, 1, &ref_color, nullptr, &ref_depth, 0,
+                                        nullptr};
         auto rpfdmi = vku::InitStruct<VkRenderPassFragmentDensityMapCreateInfoEXT>(nullptr, ref_fdm);
         auto rpci = vku::InitStruct<VkRenderPassCreateInfo>(&rpfdmi, 0u, 5u, attachments, 1u, &subpass, 0u, nullptr);
 
@@ -400,8 +399,8 @@ TEST_F(NegativeFragmentShadingRate, FragmentDensityMapDuplicateReferences) {
     {
         // FDM in color attachments
         VkAttachmentReference ref_fail[2] = {ref_color, ref_fdm};
-        VkSubpassDescription subpass = {0, VK_PIPELINE_BIND_POINT_GRAPHICS, 1, &ref_input, 2, ref_fail, nullptr, &ref_depth,
-                                        1, &ref_preserve.attachment};
+        VkSubpassDescription subpass = {0,      VK_PIPELINE_BIND_POINT_GRAPHICS, 1, &ref_input, 2, ref_fail, nullptr, &ref_depth, 0,
+                                        nullptr};
         auto rpfdmi = vku::InitStruct<VkRenderPassFragmentDensityMapCreateInfoEXT>(nullptr, ref_fdm);
         auto rpci = vku::InitStruct<VkRenderPassCreateInfo>(&rpfdmi, 0u, 5u, attachments, 1u, &subpass, 0u, nullptr);
 
@@ -411,12 +410,13 @@ TEST_F(NegativeFragmentShadingRate, FragmentDensityMapDuplicateReferences) {
 
     {
         // FDM as preserve attachment
-        uint32_t ref_fail[2] = {ref_preserve.attachment, ref_fdm.attachment};
         VkSubpassDescription subpass = {
-            0, VK_PIPELINE_BIND_POINT_GRAPHICS, 1, &ref_input, 1, &ref_color, nullptr, &ref_depth, 2, ref_fail};
+            0, VK_PIPELINE_BIND_POINT_GRAPHICS, 1, &ref_input, 1, &ref_color, nullptr, &ref_depth, 1, &ref_fdm.attachment};
         auto rpfdmi = vku::InitStruct<VkRenderPassFragmentDensityMapCreateInfoEXT>(nullptr, ref_fdm);
         auto rpci = vku::InitStruct<VkRenderPassCreateInfo>(&rpfdmi, 0u, 5u, attachments, 1u, &subpass, 0u, nullptr);
 
+        // There is no prior subpass to preserve it from
+        m_errorMonitor->SetDesiredError("VUID-VkRenderPassCreateInfo-None-10915");
         CreateRenderPassTest(rpci, false, "VUID-VkRenderPassFragmentDensityMapCreateInfoEXT-fragmentDensityMapAttachment-02548",
                              nullptr);
     }
@@ -900,8 +900,6 @@ TEST_F(NegativeFragmentShadingRate, AttachmentTexelSizeZero) {
 }
 
 TEST_F(NegativeFragmentShadingRate, Attachments) {
-    TEST_DESCRIPTION("Specify a fragment shading rate attachment with too small dimensions");
-
     AddRequiredExtensions(VK_KHR_MAINTENANCE_1_EXTENSION_NAME);
     AddRequiredExtensions(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
     AddRequiredExtensions(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
@@ -922,17 +920,19 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
     // Create a renderPass with a single fsr attachment
     VkSubpassDescription2 subpass = vku::InitStructHelper(&fsr_attachment);
 
-    VkAttachmentDescription2 attach_desc = vku::InitStructHelper();
-    attach_desc.format = VK_FORMAT_R8_UINT;
-    attach_desc.samples = VK_SAMPLE_COUNT_1_BIT;
-    attach_desc.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-    attach_desc.finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkAttachmentDescription2 attach_descs[2];
+    attach_descs[0] = vku::InitStructHelper();
+    attach_descs[0].format = VK_FORMAT_R8_UINT;
+    attach_descs[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    attach_descs[0].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+    attach_descs[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    attach_descs[1] = attach_descs[0];
 
     VkRenderPassCreateInfo2 rpci = vku::InitStructHelper();
     rpci.subpassCount = 1;
     rpci.pSubpasses = &subpass;
-    rpci.attachmentCount = 1;
-    rpci.pAttachments = &attach_desc;
+    rpci.attachmentCount = 2;
+    rpci.pAttachments = attach_descs;
 
     VkRenderPass rp;
 
@@ -940,21 +940,21 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
     // skip stateless so we can test core checks
     m_errorMonitor->SetAllowedFailureMsg("VUID-VkRenderPassCreateInfo2-flags-parameter");
     m_errorMonitor->SetDesiredError("VUID-VkRenderPassCreateInfo2-flags-04521");
-    vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
     m_errorMonitor->VerifyFound();
     rpci.flags = 0;
-    attach_desc.format =
+    attach_descs[0].format =
         FindFormatWithoutFeatures(Gpu(), VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR);
-    if (attach_desc.format != VK_FORMAT_UNDEFINED) {
+    if (attach_descs[0].format != VK_FORMAT_UNDEFINED) {
         m_errorMonitor->SetDesiredError("VUID-VkRenderPassCreateInfo2-pAttachments-04586");
-        vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+        vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
         m_errorMonitor->VerifyFound();
     }
-    attach_desc.format = VK_FORMAT_R8_UINT;
+    attach_descs[0].format = VK_FORMAT_R8_UINT;
 
     attach.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04524");
-    vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
     m_errorMonitor->VerifyFound();
     attach.layout = VK_IMAGE_LAYOUT_GENERAL;
 
@@ -970,7 +970,7 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
         fsr_properties.minFragmentShadingRateAttachmentTexelSize.height) {
         m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04529");
     }
-    vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
     m_errorMonitor->VerifyFound();
     fsr_attachment.shadingRateAttachmentTexelSize = fsr_properties.minFragmentShadingRateAttachmentTexelSize;
 
@@ -978,7 +978,7 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
     fsr_attachment.shadingRateAttachmentTexelSize.height = fsr_properties.minFragmentShadingRateAttachmentTexelSize.height / 2;
     m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04527");
     m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04530");
-    vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
     m_errorMonitor->VerifyFound();
     fsr_attachment.shadingRateAttachmentTexelSize = fsr_properties.minFragmentShadingRateAttachmentTexelSize;
 
@@ -986,7 +986,7 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
     fsr_attachment.shadingRateAttachmentTexelSize.height = fsr_properties.maxFragmentShadingRateAttachmentTexelSize.height * 2;
     m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04526");
     m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04529");
-    vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
     m_errorMonitor->VerifyFound();
     fsr_attachment.shadingRateAttachmentTexelSize = fsr_properties.minFragmentShadingRateAttachmentTexelSize;
 
@@ -995,7 +995,7 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
         fsr_properties.maxFragmentShadingRateAttachmentTexelSizeAspectRatio) {
         fsr_attachment.shadingRateAttachmentTexelSize.width = fsr_properties.maxFragmentShadingRateAttachmentTexelSize.width;
         m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04531");
-        vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+        vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
         m_errorMonitor->VerifyFound();
         fsr_attachment.shadingRateAttachmentTexelSize = fsr_properties.minFragmentShadingRateAttachmentTexelSize;
     }
@@ -1005,10 +1005,30 @@ TEST_F(NegativeFragmentShadingRate, Attachments) {
         fsr_properties.maxFragmentShadingRateAttachmentTexelSizeAspectRatio) {
         fsr_attachment.shadingRateAttachmentTexelSize.height = fsr_properties.maxFragmentShadingRateAttachmentTexelSize.height;
         m_errorMonitor->SetDesiredError("VUID-VkFragmentShadingRateAttachmentInfoKHR-pFragmentShadingRateAttachment-04532");
-        vk::CreateRenderPass2KHR(device(), &rpci, NULL, &rp);
+        vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
         m_errorMonitor->VerifyFound();
         fsr_attachment.shadingRateAttachmentTexelSize = fsr_properties.minFragmentShadingRateAttachmentTexelSize;
     }
+
+    attach.attachment = 2;
+    m_errorMonitor->SetDesiredError("VUID-VkRenderPassCreateInfo2-pSubpasses-12529");
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
+    m_errorMonitor->VerifyFound();
+    rpci.attachmentCount = 0;
+    m_errorMonitor->SetDesiredError("VUID-VkRenderPassCreateInfo2-pSubpasses-12529");
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
+    m_errorMonitor->VerifyFound();
+    rpci.attachmentCount = 2;
+    attach.attachment = 0;
+
+    VkSubpassDescription2 subpasses[4] = {subpass, subpass, subpass, vku::InitStructHelper()};
+    subpasses[3].colorAttachmentCount = 1;
+    subpasses[3].pColorAttachments = &attach;
+    rpci.subpassCount = 4;
+    rpci.pSubpasses = subpasses;
+    m_errorMonitor->SetDesiredError("VUID-VkRenderPassCreateInfo2-pAttachments-04585");
+    vk::CreateRenderPass2KHR(device(), &rpci, nullptr, &rp);
+    m_errorMonitor->VerifyFound();
 }
 
 TEST_F(NegativeFragmentShadingRate, LoadOpClear) {
@@ -2307,16 +2327,29 @@ TEST_F(NegativeFragmentShadingRate, FragmentDensityMapOffsetPreserveAttachment) 
     attachment_descriptions[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachment_descriptions[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+    VkAttachmentReference color_ref = {1u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     uint32_t preserve_attachment = 1u;
-    VkSubpassDescription subpass_description = {};
-    subpass_description.preserveAttachmentCount = 1u;
-    subpass_description.pPreserveAttachments = &preserve_attachment;
+    VkSubpassDescription subpass_descriptions[2] = {};
+    subpass_descriptions[0].colorAttachmentCount = 1u;
+    subpass_descriptions[0].pColorAttachments = &color_ref;
+    subpass_descriptions[1].preserveAttachmentCount = 1u;
+    subpass_descriptions[1].pPreserveAttachments = &preserve_attachment;
+
+    VkSubpassDependency dependency = {0u,
+                                      1u,
+                                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                      0u};
 
     VkRenderPassCreateInfo render_pass_ci = vku::InitStructHelper(&fragment_density_map_ci);
     render_pass_ci.attachmentCount = 2u;
     render_pass_ci.pAttachments = attachment_descriptions;
-    render_pass_ci.subpassCount = 1u;
-    render_pass_ci.pSubpasses = &subpass_description;
+    render_pass_ci.subpassCount = 2u;
+    render_pass_ci.pSubpasses = subpass_descriptions;
+    render_pass_ci.dependencyCount = 1u;
+    render_pass_ci.pDependencies = &dependency;
     vkt::RenderPass render_pass(*m_device, render_pass_ci);
 
     VkImageView image_views[2] = {image_view, color_image_view};
@@ -2324,6 +2357,7 @@ TEST_F(NegativeFragmentShadingRate, FragmentDensityMapOffsetPreserveAttachment) 
 
     m_command_buffer.Begin();
     m_command_buffer.BeginRenderPass(render_pass, framebuffer);
+    m_command_buffer.NextSubpass();
 
     VkPhysicalDeviceFragmentDensityMapOffsetPropertiesEXT fdm_offset_properties = vku::InitStructHelper();
     GetPhysicalDeviceProperties2(fdm_offset_properties);

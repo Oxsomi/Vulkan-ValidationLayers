@@ -378,6 +378,8 @@ class CoreChecks : public vvl::DeviceProxy {
                                     VkSubpassContents contents, const ErrorObject& error_obj) const;
     bool ValidateBufferBarrier(const LogObjectList& objlist, const Location& barrier_loc, const vvl::CommandBuffer& cb_state,
                                const BufferBarrier& barrier) const;
+    bool ValidateMemoryRangeBarrier(const LogObjectList& objlist, const Location& barrier_loc, const vvl::CommandBuffer& cb_state,
+                                    const MemoryRangeBarrier& barrier) const;
 
     bool ValidateImageBarrier(const LogObjectList& objlist, const vvl::CommandBuffer& cb_state, const ImageBarrier& barrier,
                               const Location& barrier_loc, ImageLayoutRegistry& local_layout_registry) const;
@@ -719,6 +721,8 @@ class CoreChecks : public vvl::DeviceProxy {
 
     bool ValidateDepthStencilResolve(const VkRenderPassCreateInfo2& create_info, const VkSubpassDescription2& subpass,
                                      const Location& subpass_loc) const;
+    bool ValidatePreserveAttachment(const VkRenderPassCreateInfo2& create_info, const VkSubpassDescription2& subpass,
+                                    const Location& subpass_loc) const;
 
     // Prototypes for CoreChecks accessor functions
     VkFormatProperties3 GetPDFormatProperties(const VkFormat format) const;
@@ -1007,6 +1011,8 @@ class CoreChecks : public vvl::DeviceProxy {
     bool ValidateSpecializations(const vku::safe_VkSpecializationInfo* spec, const Location& loc) const;
     bool ValidateInterfaceBetweenStages(const ShaderStageState& producer, const ShaderStageState& consumer,
                                         const Location& create_info_loc) const;
+    bool ValidateGraphicsLibraryInterpolation(const vvl::Pipeline& pipeline, const ShaderStageState& last_pre_raster,
+                                              const ShaderStageState& fragment, const Location& create_info_loc) const;
     bool ValidateFsOutputsAgainstRenderPass(const spirv::Module& module_state, const spirv::EntryPoint& entrypoint,
                                             const vvl::Pipeline& pipeline, const Location& create_info_loc) const;
     bool ValidatePipelineTessellationStages(const ShaderStageState& tesc_stage, const ShaderStageState& tese_stage,
@@ -1039,7 +1045,8 @@ class CoreChecks : public vvl::DeviceProxy {
                                                           const Location& region_loc) const;
     bool ValidateImageSubresourceRange(const uint32_t image_mip_count, const uint32_t image_layer_count,
                                        const VkImageSubresourceRange& subresourceRange, vvl::Field image_layer_count_var,
-                                       const LogObjectList& objlist, const Location& subresource_loc) const;
+                                       const LogObjectList& objlist, const Location& subresource_loc,
+                                       bool maintenance9_hint = false) const;
     bool ValidateMultipassRenderedToSingleSampledSampleCount(VkFramebuffer framebuffer, VkRenderPass renderpass,
                                                              vvl::Image& image_state, VkSampleCountFlagBits msrtss_samples,
                                                              const Location& rasterization_samples_loc) const;
@@ -1245,7 +1252,7 @@ class CoreChecks : public vvl::DeviceProxy {
                                                    const VkRenderingInfo& rendering_info, const Location& barrier_loc) const;
 
     bool ValidateImageLayoutAgainstImageUsage(const Location& layout_loc, VkImage image, VkImageLayout layout,
-                                              VkImageUsageFlags2KHR usage) const;
+                                              VkImageUsageFlags2KHR usage, bool is_stencil_usage = false) const;
 
     bool ValidateImageBarrierAgainstImage(const vvl::CommandBuffer& cb_state, const ImageBarrier& barrier,
                                           const Location& barrier_loc, const vvl::Image& image_state,
@@ -1317,7 +1324,7 @@ class CoreChecks : public vvl::DeviceProxy {
     bool PreCallValidateCmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2* pBlitImageInfo,
                                       const ErrorObject& error_obj) const override;
 
-    bool ValidateCmdBufImageLayouts(const Location& loc, const vvl::CommandBufferSubmitInfo& cb_info,
+    bool ValidateCmdBufImageLayouts(const Location& submit_loc, const vvl::CommandBufferSubmitInfo& cb_info,
                                     vvl::unordered_map<const vvl::Image*, ImageLayoutMap>& local_image_layout_state) const;
 
     void UpdateCmdBufImageLayouts(const vvl::CommandBuffer& cb_state);
@@ -1441,6 +1448,8 @@ class CoreChecks : public vvl::DeviceProxy {
 
     bool PreCallValidateDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks* pAllocator,
                                       const ErrorObject& error_obj) const override;
+    void PreCallRecordDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks* pAllocator,
+                                    const RecordObject& record_obj) override;
 
     bool PreCallValidateDestroyBufferView(VkDevice device, VkBufferView bufferView, const VkAllocationCallbacks* pAllocator,
                                           const ErrorObject& error_obj) const override;
@@ -2995,7 +3004,7 @@ class CoreChecks : public vvl::DeviceProxy {
     bool ValidateGeneratedCommandsShaderInfo(const LogObjectList objlist,
                                              const VkGeneratedCommandsShaderInfoEXT& command_shader_info,
                                              const Location& loc) const;
-    bool ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_state,
+    bool ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_state, const vvl::CommandBuffer& state_cb_state,
                                        const vvl::IndirectCommandsLayout& indirect_commands_layout,
                                        const VkGeneratedCommandsInfoEXT& generated_commands_info, bool preprocessed,
                                        const Location& info_loc) const;

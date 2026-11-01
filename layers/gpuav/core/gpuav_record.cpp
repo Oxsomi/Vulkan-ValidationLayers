@@ -51,6 +51,10 @@ void Validator::PreCallRecordCreateBuffer(VkDevice device, const VkBufferCreateI
 
     VkBufferUsageFlags2 extra_usage = 0;
 
+    if (enabled_features.descriptorHeap) {
+        extra_usage |= VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT;
+    }
+
     // Ray tracing acceleration structure instance buffers also need the storage buffer usage as
     // acceleration structure build validation will find and replace invalid acceleration structure
     // handles inside of a compute shader.
@@ -94,50 +98,39 @@ void Validator::PostCallRecordCreateBuffer(VkDevice device, const VkBufferCreate
     const VkBufferUsageFlags2 in_usage = flags2 ? flags2->usage : pCreateInfo->usage;
 
     if (in_usage & VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT) {
-        descriptor_buffer.resource_handles_.emplace(*pBuffer);
         hint_descriptor_buffer_ = true;
     }
 }
 
-void Validator::PreCallRecordDestroyBuffer(VkDevice device, VkBuffer buffer, const VkAllocationCallbacks* pAllocator,
-                                           const RecordObject& record_obj) {
-    descriptor_buffer.resource_handles_.erase(buffer);
-}
-
-void Validator::PreCallRecordFreeMemory(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* pAllocator,
-                                        const RecordObject& record_obj) {
-    if (descriptor_buffer.resource_memory_handles_.find(memory) != descriptor_buffer.resource_memory_handles_.end()) {
-        descriptor_buffer.resource_memory_handles_.erase(memory);
+void Validator::PreCallRecordAllocateMemory(VkDevice device, const VkMemoryAllocateInfo* pAllocateInfo,
+                                            const VkAllocationCallbacks* pAllocator, VkDeviceMemory* pMemory,
+                                            const RecordObject& record_obj, chassis::AllocateMemory& chassis_state) {
+    if (!enabled_features.descriptorHeap) {
+        return;
     }
-}
 
-void Validator::BindBufferMemory(VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize offset, const Location&) {
-    if (descriptor_buffer.resource_handles_.find(buffer) != descriptor_buffer.resource_handles_.end()) {
-        descriptor_buffer.resource_memory_handles_.emplace(memory);
+    chassis_state.modified_allocate_info.initialize(pAllocateInfo);
+
+    if (auto* alloc_flags_info = const_cast<VkMemoryAllocateFlagsInfo*>(
+            vku::FindStructInPNextChain<VkMemoryAllocateFlagsInfo>(chassis_state.modified_allocate_info.pNext))) {
+        alloc_flags_info->flags |= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    } else {
+        VkMemoryAllocateFlagsInfo new_alloc_flags_info = vku::InitStructHelper();
+        new_alloc_flags_info.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        vku::AddToPnext(chassis_state.modified_allocate_info, new_alloc_flags_info);
     }
-}
 
-void Validator::PostCallRecordBindBufferMemory(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize memoryOffset,
-                                               const RecordObject& record_obj) {
-    BindBufferMemory(buffer, memory, memoryOffset, record_obj.location);
-}
-
-void Validator::PostCallRecordBindBufferMemory2(VkDevice device, uint32_t bindInfoCount, const VkBindBufferMemoryInfo* pBindInfos,
-                                                const RecordObject& record_obj) {
-    for (uint32_t i = 0; i < bindInfoCount; i++) {
-        BindBufferMemory(pBindInfos[i].buffer, pBindInfos[i].memory, pBindInfos[i].memoryOffset, record_obj.location);
-    }
-}
-
-void Validator::PostCallRecordBindBufferMemory2KHR(VkDevice device, uint32_t bindInfoCount,
-                                                   const VkBindBufferMemoryInfo* pBindInfos, const RecordObject& record_obj) {
-    PostCallRecordBindBufferMemory2(device, bindInfoCount, pBindInfos, record_obj);
+    chassis_state.allocate_info_copy = chassis_state.modified_allocate_info.ptr();
 }
 
 void Validator::PreCallRecordCmdBindDescriptorBuffersEXT(VkCommandBuffer commandBuffer, uint32_t bufferCount,
                                                          const VkDescriptorBufferBindingInfoEXT* pBindingInfos,
                                                          const RecordObject& record_obj,
                                                          chassis::CmdBindDescriptorBuffers& chassis_state) {
+    if (!gpuav_settings.IsSpirvModified()) {
+        return;  // The extra binding is only used by instrumented shaders
+    }
+
     // Resize here so if using just CoreCheck we don't waste time allocating this
     chassis_state.modified_binding_infos.resize(bufferCount + 1);
     for (uint32_t i = 0; i < bufferCount; ++i) {
@@ -742,6 +735,12 @@ void Validator::PostCallRecordCmdBuildAccelerationStructuresKHR(
     const VkAccelerationStructureBuildRangeInfoKHR* const* ppBuildRangeInfos, const RecordObject& record_obj) {
     auto cb_state = GetWrite<vvl::CommandBuffer>(commandBuffer);
 
+    for (const auto& lb : cb_state->lastBound) {
+        if (lb.GetDescriptorMode() == vvl::DescriptorModeBuffer) {
+            return;
+        }
+    }
+
     auto& cb_sub_state = SubState(*cb_state);
     std::vector<AccelerationStructureGpuStateUpdate> as_gpu_state_updates(infoCount);
     for (uint32_t info_i = 0; info_i < infoCount; ++info_i) {
@@ -901,6 +900,10 @@ void Validator::PreCallRecordCmdCopyMemoryToImageIndirectKHR(
 void Validator::PreCallRecordCmdCopyMemoryToImageKHR(VkCommandBuffer commandBuffer,
                                                      const VkCopyDeviceMemoryImageInfoKHR* pCopyMemoryInfo,
                                                      const RecordObject& record_obj) {
+    if (!gpuav_settings.validate_buffer_copies) {
+        return;
+    }
+
     for (uint32_t i = 0; i < pCopyMemoryInfo->regionCount; ++i) {
         // TODO - https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/11879
         const auto buffer_states =
@@ -1015,7 +1018,7 @@ bool Validator::ValidateProtectedTensor(const vvl::CommandBuffer& cb_state, cons
     // if driver supports protectedNoFault the operation is valid, just has undefined values
     if ((!phys_dev_props_core11.protectedNoFault) && (cb_state.unprotected == true)) {
         const LogObjectList objlist(cb_state.Handle(), tensor_state.Handle());
-        skip |= LogError("VUID-vkCmdDispatchDataGraphARM-commandBuffer-09800", objlist, tensor_loc,
+        skip |= LogError("VUID-vkCmdDispatchDataGraphARM-commandBuffer-02707", objlist, tensor_loc,
                          "(%s) is a protected tensor, but command buffer (%s) is unprotected.%s",
                          FormatHandle(tensor_state).c_str(), FormatHandle(cb_state).c_str(), more_message);
     }

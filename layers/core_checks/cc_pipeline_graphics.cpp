@@ -61,17 +61,12 @@ bool CoreChecks::PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPipel
         skip |= ValidateGraphicsPipeline(*pipeline_states[i].get(), pCreateInfos[i].pNext, create_info_loc);
         skip |= ValidateGraphicsPipelineDerivatives(pipeline_states, i, create_info_loc);
 
-        // From dumping traces, we found almost all apps only create one pipeline at a time. To greatly simplify the logic, only
-        // check the stateless validation in the pNext chain for the first pipeline. (The core issue is because we parse the SPIR-V
-        // at state tracking time, and we state track pipelines first)
-        if (i == 0) {
-            uint32_t stage_count = std::min(pCreateInfos[0].stageCount, kCommonMaxGraphicsShaderStages);
-            for (uint32_t stage = 0; stage < stage_count; stage++) {
-                if (chassis_state.stateless_data[stage].pipeline_pnext_module) {
-                    skip |= stateless_spirv_validator.Validate(
-                        *chassis_state.stateless_data[stage].pipeline_pnext_module, chassis_state.stateless_data[stage],
-                        create_info_loc.dot(Field::pStages, stage).pNext(Struct::VkShaderModuleCreateInfo, Field::pCode));
-                }
+        const std::vector<spirv::StatelessData>& stateless_data = chassis_state.stateless_data[i];
+        for (uint32_t stage = 0; stage < stateless_data.size(); stage++) {
+            if (stateless_data[stage].pipeline_pnext_module) {
+                skip |= stateless_spirv_validator.Validate(
+                    *stateless_data[stage].pipeline_pnext_module, stateless_data[stage],
+                    create_info_loc.dot(Field::pStages, stage).pNext(Struct::VkShaderModuleCreateInfo, Field::pCode));
             }
         }
     }
@@ -1524,6 +1519,17 @@ bool CoreChecks::ValidateGraphicsPipelineExternalFormatResolve(const vvl::Pipeli
         return skip;
     }
 
+    if (pipeline.OwnsLibState(pipeline.pre_raster_state) && pipeline.fragment_output_state) {
+        const ShaderStageState* stage_state = pipeline.GetShaderStageState(pipeline.pre_raster_state->last_stage);
+        if (stage_state && stage_state->HasSpirv() && stage_state->entrypoint->written_built_in_primitive_shading_rate_khr) {
+            skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-externalFormatResolve-09317", stage_state->module_state->Handle(),
+                             create_info_loc.dot(Field::subpass),
+                             "(%" PRIu32 ") has an external format resolve attachment (externalFormat %" PRIu64
+                             "), but the last pre-rasterization shader stage %s statically writes to PrimitiveShadingRateKHR.",
+                             pipeline.Subpass(), external_format, stage_state->entrypoint->Describe().c_str());
+        }
+    }
+
     const auto* multisample_state = pipeline.MultisampleState();
     if (!pipeline.IsDynamic(CB_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT) && multisample_state) {
         if (multisample_state->rasterizationSamples != VK_SAMPLE_COUNT_1_BIT) {
@@ -1601,6 +1607,17 @@ bool CoreChecks::ValidateGraphicsPipelineExternalFormatResolveDynamicRendering(c
             skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-externalFormatResolve-09310", device,
                              create_info_loc.pNext(Struct::VkExternalFormatANDROID, Field::externalFormat),
                              "is %" PRIu64 " but the fragment shader declares StencilRefReplacingEXT.", external_format);
+        }
+    }
+
+    if (pipeline.OwnsLibState(pipeline.pre_raster_state) && pipeline.fragment_output_state) {
+        const ShaderStageState* stage_state = pipeline.GetShaderStageState(pipeline.pre_raster_state->last_stage);
+        if (stage_state && stage_state->HasSpirv() && stage_state->entrypoint->written_built_in_primitive_shading_rate_khr) {
+            skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-externalFormatResolve-09308", stage_state->module_state->Handle(),
+                             create_info_loc.pNext(Struct::VkExternalFormatANDROID, Field::externalFormat),
+                             "is %" PRIu64
+                             " but the last pre-rasterization shader stage %s statically writes to PrimitiveShadingRateKHR.",
+                             external_format, stage_state->entrypoint->Describe().c_str());
         }
     }
 
@@ -2013,7 +2030,8 @@ bool CoreChecks::ValidateGraphicsPipelineColorBlendState(const vvl::Pipeline& pi
                          rendering_struct->colorAttachmentCount);
     }
 
-    if (!null_rp && subpass_desc && color_blend_state->attachmentCount != subpass_desc->colorAttachmentCount) {
+    if (!null_rp && subpass_desc && rp_state->UsesColorAttachment(pipeline.Subpass()) &&
+        color_blend_state->attachmentCount != subpass_desc->colorAttachmentCount) {
         if (!pipeline.IsColorBlendStateAttachmentCountIgnore(enabled_features.advancedBlendCoherentOperations)) {
             skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-renderPass-07609", device, color_loc.dot(Field::attachmentCount),
                              "(%" PRIu32 ") is different than %s pSubpasses[%" PRIu32 "].colorAttachmentCount (%" PRIu32
@@ -2210,9 +2228,11 @@ bool CoreChecks::ValidateGraphicsPipelineRenderPassRasterization(const vvl::Pipe
             if (!ds_state) {
                 if (!pipeline.IsDepthStencilStateDynamic() || !IsExtEnabled(extensions.vk_ext_extended_dynamic_state3)) {
                     skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-renderPass-09028", rp_state.Handle(), ds_loc,
-                                     "is NULL when rasterization is enabled "
-                                     "and subpass %" PRIu32 " uses a depth/stencil attachment.",
-                                     pipeline.Subpass());
+                                     "is NULL when rasterization is enabled and subpass %" PRIu32
+                                     " uses a depth/stencil attachment.\nIf the following are all set, it can be NULL\n - "
+                                     "VK_EXT_extended_dynamic_state3 (%senabled)\n%s",
+                                     pipeline.Subpass(), IsExtEnabled(extensions.vk_ext_extended_dynamic_state3) ? "" : "not ",
+                                     pipeline.DescribeDynamicStateSet(kDepthStencilStateDynamic).c_str());
                 }
             } else {
                 const float minDepthBounds = ds_state->minDepthBounds;
@@ -2701,9 +2721,12 @@ bool CoreChecks::ValidateGraphicsPipelineNullState(const vvl::Pipeline& pipeline
         // if VK_KHR_dynamic_rendering is not enabled, can be null renderpass if using GPL
         if (!fragment_output_state_undefined && pipeline.OwnsLibState(pipeline.fragment_output_state) &&
             !pipeline.MultisampleState() && !ms_state_dynamic) {
-            skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-renderpass-06631", device,
-                             create_info_loc.dot(Field::pMultisampleState),
-                             "is NULL, but pipeline is being created with fragment shader that uses samples.");
+            skip |= LogError(
+                "VUID-VkGraphicsPipelineCreateInfo-renderpass-06631", device, create_info_loc.dot(Field::pMultisampleState),
+                "is NULL, but pipeline is being created with fragment shader that uses samples.\nHint: It can be "
+                "NULL if VK_EXT_extended_dynamic_state3 is enabled and the VK_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT, "
+                "VK_DYNAMIC_STATE_SAMPLE_MASK_EXT, VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT (and "
+                "VK_DYNAMIC_STATE_ALPHA_TO_ONE_ENABLE_EXT if the alphaToOne feature is enabled) dynamic states are set.");
         }
     }
 
@@ -2762,7 +2785,8 @@ bool CoreChecks::ValidateGraphicsPipelineRasterizationOrderAttachmentAccess(cons
         if (null_rp) {
             if (!enabled_features.dynamicRenderingLocalRead && (raster_order_attach_depth || raster_order_attach_stencil)) {
                 skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-None-09526", device, ds_loc.dot(Field::flags),
-                                 "is %s but renderPass is VK_NULL_HANDLE.",
+                                 "is %s but renderPass is VK_NULL_HANDLE.\nHint: This can be allowed if the "
+                                 "dynamicRenderingLocalRead feature is enabled.",
                                  string_VkPipelineDepthStencilStateCreateFlags(ds_state->flags).c_str());
             }
         } else if (!rp_state->UsesDynamicRendering()) {
@@ -2818,7 +2842,8 @@ bool CoreChecks::ValidateGraphicsPipelineRasterizationOrderAttachmentAccess(cons
                 skip |= LogError("VUID-VkGraphicsPipelineCreateInfo-flags-06482", device, color_loc.dot(Field::flags),
                                  "includes "
                                  "VK_PIPELINE_COLOR_BLEND_STATE_CREATE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_BIT_EXT, but "
-                                 "renderpass is VK_NULL_HANDLE.");
+                                 "renderpass is VK_NULL_HANDLE.\nHint: This can be allowed if the dynamicRenderingLocalRead "
+                                 "feature is enabled.");
             }
 
             if (!null_rp && subpass_desc &&
@@ -3403,10 +3428,13 @@ bool CoreChecks::ValidateGraphicsPipelineDynamicRendering(const vvl::Pipeline& p
             !IsExtEnabled(extensions.vk_ext_extended_dynamic_state3)) {
             skip |= LogError(
                 "VUID-VkGraphicsPipelineCreateInfo-renderPass-09033", device, create_info_loc.dot(Field::pDepthStencilState),
-                "is NULL, but %s is %s and stencilAttachmentFormat is %s.",
+                "is NULL, but %s is %s and stencilAttachmentFormat is %s.\nIf the following are all set, it can be NULL\n - "
+                "VK_EXT_extended_dynamic_state3 (%senabled)\n%s",
                 create_info_loc.pNext(Struct::VkPipelineRenderingCreateInfo, Field::depthAttachmentFormat).Fields().c_str(),
                 string_VkFormat(rendering_struct->depthAttachmentFormat),
-                string_VkFormat(rendering_struct->stencilAttachmentFormat));
+                string_VkFormat(rendering_struct->stencilAttachmentFormat),
+                IsExtEnabled(extensions.vk_ext_extended_dynamic_state3) ? "" : "not ",
+                pipeline.DescribeDynamicStateSet(kDepthStencilStateDynamic).c_str());
         }
 
         if (pipeline.fragment_output_state && (rendering_struct->colorAttachmentCount != 0) && !color_blend_state &&
@@ -3416,9 +3444,12 @@ bool CoreChecks::ValidateGraphicsPipelineDynamicRendering(const vvl::Pipeline& p
                 if (format != VK_FORMAT_UNDEFINED) {
                     skip |= LogError(
                         "VUID-VkGraphicsPipelineCreateInfo-renderPass-09037", device, create_info_loc.dot(Field::pColorBlendState),
-                        "is NULL, but %s is %" PRIu32 " and pColorAttachmentFormats[%" PRIu32 "] is %s.",
+                        "is NULL, but %s is %" PRIu32 " and pColorAttachmentFormats[%" PRIu32
+                        "] is %s.\nIf the following are all set, it can be NULL\n - VK_EXT_extended_dynamic_state3 (%senabled)\n%s",
                         create_info_loc.pNext(Struct::VkPipelineRenderingCreateInfo, Field::colorAttachmentCount).Fields().c_str(),
-                        rendering_struct->colorAttachmentCount, i, string_VkFormat(format));
+                        rendering_struct->colorAttachmentCount, i, string_VkFormat(format),
+                        IsExtEnabled(extensions.vk_ext_extended_dynamic_state3) ? "" : "not ",
+                        pipeline.DescribeDynamicStateSet(kColorBlendStateDynamic).c_str());
                 }
             }
         }
@@ -3737,11 +3768,17 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpass(const LastBound& last_bou
                          FormatHandle(pipeline).c_str(), pipeline_rendering_ci.viewMask, rendering_view_mask);
     }
 
+    // With rasterization disabled there is no fragment output interface state and the attachment formats in
+    // VkPipelineRenderingCreateInfo are ignored, so |pipeline_rendering_ci| is going to have false zero in it
+    if (!last_bound_state.IsRasterizationDisabled()) {
+        skip |=
+            ValidateDrawPipelineDynamicRenderpassFragmentFormat(last_bound_state, pipeline, rp_state, pipeline_rendering_ci, loc);
+        skip |= ValidateDrawPipelineDynamicRenderpassDepthStencil(last_bound_state, pipeline, rp_state, pipeline_rendering_ci, loc);
+        skip |= ValidateDrawPipelineDynamicRenderpassUnusedAttachments(last_bound_state, pipeline, rp_state, pipeline_rendering_ci,
+                                                                       loc);
+    }
+
     skip |= ValidateDrawPipelineDynamicRenderpassNonInherited(last_bound_state, pipeline, rp_state, loc);
-    skip |= ValidateDrawPipelineDynamicRenderpassFragmentFormat(last_bound_state, pipeline, rp_state, pipeline_rendering_ci, loc);
-    skip |= ValidateDrawPipelineDynamicRenderpassDepthStencil(last_bound_state, pipeline, rp_state, pipeline_rendering_ci, loc);
-    skip |=
-        ValidateDrawPipelineDynamicRenderpassUnusedAttachments(last_bound_state, pipeline, rp_state, pipeline_rendering_ci, loc);
     skip |= ValidateDrawPipelineDynamicRenderpassLegacyDithering(last_bound_state, pipeline, rp_state, loc);
     skip |= ValidateDrawPipelineDynamicRenderpassSampleCount(last_bound_state, pipeline, rp_state, loc);
     skip |= ValidateDrawPipelineDynamicRenderpassFragmentShadingRate(last_bound_state, pipeline, rp_state, loc);
@@ -4047,7 +4084,8 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassUnusedAttachments(const La
                                  "VkRenderingInfo::pColorAttachments[%" PRIu32
                                  "].imageView is VK_NULL_HANDLE, but the corresponding format in "
                                  "VkPipelineRenderingCreateInfo::pColorAttachmentFormats[%" PRIu32
-                                 "] is %s (but must be VK_FORMAT_UNDEFINED).",
+                                 "] is %s (but must be VK_FORMAT_UNDEFINED).\nHint: This can be allowed if the "
+                                 "dynamicRenderingUnusedAttachments feature is enabled.",
                                  i, i, string_VkFormat(pipeline_rendering_ci.pColorAttachmentFormats[i]));
                 }
             } else {
@@ -4056,13 +4094,16 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassUnusedAttachments(const La
                 if ((pipeline_rendering_ci.colorAttachmentCount > i) &&
                     view_state->create_info.format != pipeline_rendering_ci.pColorAttachmentFormats[i]) {
                     const LogObjectList objlist(cb_state.Handle(), pipeline.Handle());
-                    skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_COLOR_FORMATS_08910),
-                                     objlist, loc,
-                                     "VkRenderingInfo::pColorAttachments[%" PRIu32
-                                     "].imageView format (%s) must match the corresponding format in "
-                                     "VkPipelineRenderingCreateInfo::pColorAttachmentFormats[%" PRIu32 "] (%s)",
-                                     i, string_VkFormat(view_state->create_info.format), i,
-                                     string_VkFormat(pipeline_rendering_ci.pColorAttachmentFormats[i]));
+                    skip |= LogError(
+                        CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_COLOR_FORMATS_08910), objlist, loc,
+                        "VkRenderingInfo::pColorAttachments[%" PRIu32
+                        "].imageView format (%s) must match the corresponding format in "
+                        "VkPipelineRenderingCreateInfo::pColorAttachmentFormats[%" PRIu32 "] (%s)%s",
+                        i, string_VkFormat(view_state->create_info.format), i,
+                        string_VkFormat(pipeline_rendering_ci.pColorAttachmentFormats[i]),
+                        pipeline_rendering_ci.pColorAttachmentFormats[i] == VK_FORMAT_UNDEFINED
+                            ? "\nHint: This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled."
+                            : "");
                 }
             }
         }
@@ -4093,19 +4134,23 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassUnusedAttachments(const La
                         LogError(CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_UNDEFINED_DEPTH_FORMAT_08913),
                                  objlist, loc,
                                  "VkRenderingInfo::pDepthAttachment.imageView is VK_NULL_HANDLE, but the corresponding format in "
-                                 "VkPipelineRenderingCreateInfo::depthAttachmentFormat is %s.",
+                                 "VkPipelineRenderingCreateInfo::depthAttachmentFormat is %s.\nHint: This can be allowed if the "
+                                 "dynamicRenderingUnusedAttachments feature is enabled.",
                                  string_VkFormat(pipeline_rendering_ci.depthAttachmentFormat));
                 }
             } else {
                 auto view_state = Get<vvl::ImageView>(rendering_info.pDepthAttachment->imageView);
                 if (view_state && view_state->create_info.format != pipeline_rendering_ci.depthAttachmentFormat) {
                     const LogObjectList objlist(cb_state.Handle(), pipeline.Handle());
-                    skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_DEPTH_FORMAT_08914), objlist,
-                                     loc,
-                                     "VkRenderingInfo::pDepthAttachment->imageView format (%s) must match the corresponding format "
-                                     "in VkPipelineRenderingCreateInfo::depthAttachmentFormat (%s)",
-                                     string_VkFormat(view_state->create_info.format),
-                                     string_VkFormat(pipeline_rendering_ci.depthAttachmentFormat));
+                    skip |= LogError(
+                        CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_DEPTH_FORMAT_08914), objlist, loc,
+                        "VkRenderingInfo::pDepthAttachment->imageView format (%s) must match the corresponding format "
+                        "in VkPipelineRenderingCreateInfo::depthAttachmentFormat (%s)%s",
+                        string_VkFormat(view_state->create_info.format),
+                        string_VkFormat(pipeline_rendering_ci.depthAttachmentFormat),
+                        pipeline_rendering_ci.depthAttachmentFormat == VK_FORMAT_UNDEFINED
+                            ? "\nHint: This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled."
+                            : "");
                 }
             }
         }
@@ -4115,9 +4160,13 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassUnusedAttachments(const La
             const LogObjectList objlist(cb_state.Handle(), pipeline.Handle());
             skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_DEPTH_FORMAT_08914), objlist, loc,
                              "VkCommandBufferInheritanceRenderingInfo::depthAttachmentFormat (%s) must match the corresponding "
-                             "format in VkPipelineRenderingCreateInfo::depthAttachmentFormat (%s)",
+                             "format in VkPipelineRenderingCreateInfo::depthAttachmentFormat (%s)%s",
                              string_VkFormat(rp_state.inheritance_rendering_info.depthAttachmentFormat),
-                             string_VkFormat(pipeline_rendering_ci.depthAttachmentFormat));
+                             string_VkFormat(pipeline_rendering_ci.depthAttachmentFormat),
+                             (rp_state.inheritance_rendering_info.depthAttachmentFormat == VK_FORMAT_UNDEFINED ||
+                              pipeline_rendering_ci.depthAttachmentFormat == VK_FORMAT_UNDEFINED)
+                                 ? "\nHint: This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled."
+                                 : "");
         }
     }
 
@@ -4147,19 +4196,23 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassUnusedAttachments(const La
                                  objlist, loc,
                                  "VkRenderingInfo::pStencilAttachment.imageView is VK_NULL_HANDLE, but the "
                                  "corresponding format in "
-                                 "VkPipelineRenderingCreateInfo::stencilAttachmentFormat is %s.",
+                                 "VkPipelineRenderingCreateInfo::stencilAttachmentFormat is %s.\nHint: This can be allowed if the "
+                                 "dynamicRenderingUnusedAttachments feature is enabled.",
                                  string_VkFormat(pipeline_rendering_ci.stencilAttachmentFormat));
                 }
             } else {
                 auto view_state = Get<vvl::ImageView>(rendering_info.pStencilAttachment->imageView);
                 if (view_state && view_state->create_info.format != pipeline_rendering_ci.stencilAttachmentFormat) {
                     const LogObjectList objlist(cb_state.Handle(), pipeline.Handle());
-                    skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_STENCIL_FORMAT_08917),
-                                     objlist, loc,
-                                     "VkRenderingInfo::pStencilAttachment->imageView format (%s) must match the corresponding "
-                                     "format in VkPipelineRenderingCreateInfo::stencilAttachmentFormat (%s)",
-                                     string_VkFormat(view_state->create_info.format),
-                                     string_VkFormat(pipeline_rendering_ci.stencilAttachmentFormat));
+                    skip |= LogError(
+                        CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_STENCIL_FORMAT_08917), objlist, loc,
+                        "VkRenderingInfo::pStencilAttachment->imageView format (%s) must match the corresponding "
+                        "format in VkPipelineRenderingCreateInfo::stencilAttachmentFormat (%s)%s",
+                        string_VkFormat(view_state->create_info.format),
+                        string_VkFormat(pipeline_rendering_ci.stencilAttachmentFormat),
+                        pipeline_rendering_ci.stencilAttachmentFormat == VK_FORMAT_UNDEFINED
+                            ? "\nHint: This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled."
+                            : "");
                 }
             }
         }
@@ -4169,9 +4222,13 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassUnusedAttachments(const La
             const LogObjectList objlist(cb_state.Handle(), pipeline.Handle());
             skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::DYNAMIC_RENDERING_STENCIL_FORMAT_08917), objlist, loc,
                              "VkCommandBufferInheritanceRenderingInfo::stencilAttachmentFormat (%s) must match the corresponding "
-                             "format in VkPipelineRenderingCreateInfo::stencilAttachmentFormat (%s)",
+                             "format in VkPipelineRenderingCreateInfo::stencilAttachmentFormat (%s)%s",
                              string_VkFormat(rp_state.inheritance_rendering_info.stencilAttachmentFormat),
-                             string_VkFormat(pipeline_rendering_ci.stencilAttachmentFormat));
+                             string_VkFormat(pipeline_rendering_ci.stencilAttachmentFormat),
+                             (rp_state.inheritance_rendering_info.stencilAttachmentFormat == VK_FORMAT_UNDEFINED ||
+                              pipeline_rendering_ci.stencilAttachmentFormat == VK_FORMAT_UNDEFINED)
+                                 ? "\nHint: This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled."
+                                 : "");
         }
     }
 
@@ -4307,7 +4364,8 @@ bool CoreChecks::ValidateDrawPipelineDynamicRenderpassSampleCount(const LastBoun
                                             attachment->create_info.image);
                 skip |= LogError(CreateActionVuid(loc.function, vuid), objlist, loc,
                                  "%s was created with an image sample count (%s) which does not match the corresponding "
-                                 "VkPipelineMultisampleStateCreateInfo::rasterizationSamples (%s)",
+                                 "VkPipelineMultisampleStateCreateInfo::rasterizationSamples (%s).\nHint: This can be allowed in "
+                                 "some cases if the multisampledRenderToSingleSampled feature is enabled.",
                                  attachment_info.Describe(cb_state, i).c_str(), string_VkSampleCountFlagBits(attachment->samples),
                                  string_VkSampleCountFlagBits(rasterization_samples));
             }
@@ -4338,12 +4396,12 @@ bool CoreChecks::ValidatePipelineVertexDivisors(const vvl::Pipeline& pipeline, c
         const auto* vibdd = &(divisor_state_info->pVertexBindingDivisors[j]);
         if (vibdd->binding >= phys_dev_props.limits.maxVertexInputBindings) {
             skip |= LogError("VUID-VkVertexInputBindingDivisorDescription-binding-01869", device, divisor_loc.dot(Field::binding),
-                             "(%" PRIu32 ") exceeds device maxVertexInputBindings (%" PRIu32 ").", vibdd->binding,
+                             "(%" PRIu32 ") is greater than maxVertexInputBindings (%" PRIu32 ").", vibdd->binding,
                              phys_dev_props.limits.maxVertexInputBindings);
         }
         if (vibdd->divisor > phys_dev_props_core14.maxVertexAttribDivisor) {
             skip |= LogError("VUID-VkVertexInputBindingDivisorDescription-divisor-01870", device, divisor_loc.dot(Field::divisor),
-                             "(%" PRIu32 ") exceeds device maxVertexAttribDivisor (%" PRIu32 ").", vibdd->divisor,
+                             "(%" PRIu32 ") is greater than maxVertexAttribDivisor (%" PRIu32 ").", vibdd->divisor,
                              phys_dev_props_core14.maxVertexAttribDivisor);
         }
         if ((0 == vibdd->divisor) && !enabled_features.vertexAttributeInstanceRateZeroDivisor) {

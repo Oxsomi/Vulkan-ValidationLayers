@@ -326,9 +326,16 @@ bool CoreChecks::IsSameNativeWindow(const VkSurfaceKHR surface_a, const VkSurfac
         return true;
     }
 
-    // TODO - https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10112
-    // Need to handle all cases, for now, prevent false positives
-    return true;
+    // Multiple VkSurfaceKHR can be created from the same native window
+    // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10112
+    const vvl::SurfaceType type_a = surface_state_a->GetSurfaceType();
+    const vvl::SurfaceType type_b = surface_state_b->GetSurfaceType();
+    if (type_a != type_b) {
+        // Incase you try different types, so handles could be the same
+        return false;
+    }
+
+    return surface_state_a->GetNativeWindow() == surface_state_b->GetNativeWindow();
 }
 
 bool CoreChecks::ValidateCreateSwapchain(const VkSwapchainCreateInfoKHR& create_info, const vvl::Surface* surface_state,
@@ -1914,10 +1921,10 @@ bool core::Instance::PreCallValidateCreateDisplayPlaneSurfaceKHR(VkInstance inst
             if (pCreateInfo->planeStackIndex >= display_plane_property_count) {
                 skip |= LogError("VUID-VkDisplaySurfaceCreateInfoKHR-planeReorderPossible-01253", display_mode,
                                  create_info_loc.dot(Field::planeStackIndex),
-                                 "(%" PRIu32 ") must be in the range [0, %" PRIu32
-                                 "] that was returned by "
+                                 "(%" PRIu32 ") must be less than the number of display planes (%" PRIu32
+                                 ") returned by "
                                  "vkGetPhysicalDeviceDisplayPlanePropertiesKHR.\nNote: planeReorderPossible was found to be true.",
-                                 pCreateInfo->planeStackIndex, display_plane_property_count - 1);
+                                 pCreateInfo->planeStackIndex, display_plane_property_count);
             }
         } else {
             std::vector<VkDisplayPlanePropertiesKHR> plane_props(display_plane_property_count);
@@ -2203,14 +2210,16 @@ bool core::Instance::ValidateGetPhysicalDeviceDisplayPlaneProperties(VkPhysicalD
                                                                      const Location& plane_index_loc) const {
     bool skip = false;
 
-    uint32_t display_plane_property_count;
-    DispatchGetPhysicalDeviceDisplayPlanePropertiesKHR(physicalDevice, &display_plane_property_count, nullptr);
+    uint32_t display_plane_property_count = 0;
+    if (DispatchGetPhysicalDeviceDisplayPlanePropertiesKHR(physicalDevice, &display_plane_property_count, nullptr) != VK_SUCCESS) {
+        return skip;
+    }
     if (planeIndex >= display_plane_property_count) {
         skip |= LogError("VUID-vkGetDisplayPlaneSupportedDisplaysKHR-planeIndex-01249", physicalDevice, plane_index_loc,
-                         "(%" PRIu32 ") must be in the range [0, %" PRIu32
-                         "] that was returned by "
+                         "(%" PRIu32 ") must be less than the number of display planes (%" PRIu32
+                         ") returned by "
                          "vkGetPhysicalDeviceDisplayPlanePropertiesKHR\nHint: Do you have the plane index hardcoded?",
-                         planeIndex, display_plane_property_count - 1);
+                         planeIndex, display_plane_property_count);
     }
 
     return skip;

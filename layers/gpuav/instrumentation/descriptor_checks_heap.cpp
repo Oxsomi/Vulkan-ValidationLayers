@@ -175,7 +175,7 @@ void RegisterDescriptorChecksHeapValidation(Validator& gpuav, CommandBufferSubSt
                 const spirv::HeapMappingStatus* heap_status = nullptr;
                 if (is_untyped) {
                     // TODO - Print some info for untyped pointers
-                } else if (!instrumented_shader || mapping_index_decoded > instrumented_shader->status.heap_mappings.size()) {
+                } else if (!instrumented_shader || mapping_index_decoded >= instrumented_shader->status.heap_mappings.size()) {
                     ss << "(VkDescriptorSetAndBindingMappingEXT not found) ";
                 } else {
                     heap_status = &instrumented_shader->status.heap_mappings[mapping_index_decoded];
@@ -629,35 +629,36 @@ void RegisterDescriptorChecksHeapValidation(Validator& gpuav, CommandBufferSubSt
         out_update.binding = glsl::kBindingInstDescriptorHeap;
     });
 
-    cb.on_pre_cb_submission_functions.emplace_back(
-        [](Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_submission_cb) {
-            if (!gpuav.global_settings.descriptor_hashing) {
-                return;
-            }
+    if (!gpuav.global_settings.descriptor_hashing) {
+        return;
+    }
 
-            DescriptorChecksHeapHashTable* hash_table_state = cb.shared_resources_cache.TryGet<DescriptorChecksHeapHashTable>();
-            if (!hash_table_state) {
-                return;
-            }
+    cb.on_pre_cb_submission_functions.emplace_back([](Validator& gpuav, CommandBufferSubState& cb,
+                                                      VkCommandBuffer per_submission_cb, gpuav::QueueSubmission& queue_submission,
+                                                      gpuav::CommandBufferSubmitInfo& cb_submit_info) {
+        DescriptorChecksHeapHashTable* hash_table_state = cb.shared_resources_cache.TryGet<DescriptorChecksHeapHashTable>();
+        if (!hash_table_state) {
+            return;
+        }
 
-            // Current issue with |descriptor_hashing.table| is it done on the CPU because
-            // - it can be both large (few MB)
-            // - We expect MANY small writes to it on the CPU
-            // - GPU Dump also plans to use it, and it doesn't need GPU memory to do it
-            //
-            // TODO - We are doing a VERY wasteful double buffer allocation per cmd buffer
-            // We need to design a way to at least make only a single staging buffer for the entire
-            // application
-            vvl::DescriptorHashing& descriptor_hashing = *gpuav.device_state->descriptor_hashing;
-            ReadLockGuard guard(descriptor_hashing.map_lock);
-            const VkDeviceSize table_size = descriptor_hashing.table.Size();
+        // Current issue with |descriptor_hashing.table| is it done on the CPU because
+        // - it can be both large (few MB)
+        // - We expect MANY small writes to it on the CPU
+        // - GPU Dump also plans to use it, and it doesn't need GPU memory to do it
+        //
+        // TODO - We are doing a VERY wasteful double buffer allocation per cmd buffer
+        // We need to design a way to at least make only a single staging buffer for the entire
+        // application
+        vvl::DescriptorHashing& descriptor_hashing = *gpuav.device_state->descriptor_hashing;
+        ReadLockGuard guard(descriptor_hashing.map_lock);
+        const VkDeviceSize table_size = descriptor_hashing.table.Size();
 
-            vko::BufferRange staging_buffer = cb.gpu_resources_manager.GetHostCachedBufferRange(table_size);
-            memcpy(staging_buffer.offset_mapped_ptr, descriptor_hashing.table.slots.data(), static_cast<size_t>(table_size));
-            cb.gpu_resources_manager.FlushAllocation(staging_buffer);
+        vko::BufferRange staging_buffer = queue_submission.resources_manager->GetHostCachedBufferRange(table_size);
+        memcpy(staging_buffer.offset_mapped_ptr, descriptor_hashing.table.slots.data(), static_cast<size_t>(table_size));
+        queue_submission.resources_manager->FlushAllocation(staging_buffer);
 
-            vko::CmdSynchronizedCopyBufferRange(per_submission_cb, hash_table_state->buffer_range, staging_buffer);
-        });
+        vko::CmdSynchronizedCopyBufferRange(per_submission_cb, hash_table_state->buffer_range, staging_buffer);
+    });
 }
 
 }  // namespace gpuav

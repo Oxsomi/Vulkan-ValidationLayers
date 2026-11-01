@@ -470,6 +470,8 @@ StatelessDeviceData::StatelessDeviceData(DispatchInstance* instance, VkPhysicalD
                                              &phys_dev_ext_props.descriptor_buffer_props);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_ext_descriptor_buffer,
                                              &phys_dev_ext_props.descriptor_buffer_density_props);
+    instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_ext_graphics_pipeline_library,
+                                             &phys_dev_ext_props.graphics_pipeline_library_props);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_ext_device_generated_commands,
                                              &phys_dev_ext_props.device_generated_commands_props);
     instance->GetPhysicalDeviceExtProperties(physical_device, extensions.vk_khr_pipeline_binary,
@@ -937,7 +939,8 @@ DispatchDevice::DispatchDevice(DispatchInstance* instance, VkPhysicalDevice gpu,
       host_image_copy_props_copy_dst_layouts(stateless_device_data.host_image_copy_props_copy_dst_layouts),
       phys_dev_ext_props(stateless_device_data.phys_dev_ext_props),
       physical_device(gpu) {
-    passthrough_handles = vku::FindStructInPNextChain<VkDeviceDeviceMemoryReportCreateInfoEXT>(pCreateInfo->pNext) != nullptr;
+    passthrough_handles = vku::FindStructInPNextChain<VkDeviceDeviceMemoryReportCreateInfoEXT>(pCreateInfo->pNext) != nullptr ||
+                          enabled_features.reportAddressBinding;
     InitValidationObjects();
     InitObjectDispatchVectors();
     for (auto& vo : object_dispatch) {
@@ -2075,6 +2078,7 @@ VkResult DispatchDevice::DeferredOperationJoinKHR(VkDevice device, VkDeferredOpe
 
     // If this thread completed the operation, free any retained memory.
     if (result == VK_SUCCESS) {
+        std::lock_guard<std::mutex> lock(deferred_operation_mutex);
         auto post_op_completion_fns = deferred_operation_post_completion.pop(operation);
         if (post_op_completion_fns != deferred_operation_post_completion.end()) {
             for (auto& post_op_completion_fn : post_op_completion_fns->second) {
@@ -2106,6 +2110,9 @@ VkResult DispatchDevice::GetDeferredOperationResultKHR(VkDevice device, VkDeferr
     VkResult result = device_dispatch_table.GetDeferredOperationResultKHR(device, operation);
     // Add created pipelines if successful
     if (result == VK_SUCCESS) {
+        // Another thread might be done with vkDeferredOperationJoinKHR but still running the post completion functions
+        // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/4914
+        std::lock_guard<std::mutex> lock(deferred_operation_mutex);
         // Perfectly valid to never call vkDeferredOperationJoin before getting the result,
         // so we need to make sure functions associated to the current operation and
         // stored in deferred_operation_post_completion have been called

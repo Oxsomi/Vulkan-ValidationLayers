@@ -1379,27 +1379,30 @@ void DeviceState::FinishDeviceSetup(const VkDeviceCreateInfo* pCreateInfo, const
 
     if (IsExtEnabled(extensions.vk_ext_descriptor_heap) || IsExtEnabled(extensions.vk_ext_descriptor_buffer)) {
         cached_descriptor_size.Init(*this);
-        descriptor_hashing = std::make_unique<DescriptorHashing>(global_settings.descriptor_hashing_total_descriptors);
-        if (IsExtEnabled(extensions.vk_ext_descriptor_heap)) {
-            descriptor_hashing->heap_all_descriptor_sizes = cached_descriptor_size.GetAllSizes(true);
-            for (VkDeviceSize size : descriptor_hashing->heap_all_descriptor_sizes) {
-                if (size > descriptor_hashing->heap_max_descriptor_size) {
-                    descriptor_hashing->heap_max_descriptor_size = size;
-                }
-            }
-        }
-        if (IsExtEnabled(extensions.vk_ext_descriptor_buffer)) {
-            descriptor_hashing->buffer_all_descriptor_sizes = cached_descriptor_size.GetAllSizes(false);
-            for (VkDeviceSize size : descriptor_hashing->buffer_all_descriptor_sizes) {
-                if (size > descriptor_hashing->buffer_max_descriptor_size) {
-                    descriptor_hashing->buffer_max_descriptor_size = size;
-                }
-            }
-        }
 
-        // |force_on_robustness| marks the "modified" feature so need to check for both
-        if (enabled_features.nullDescriptor || gpuav_settings.force_on_robustness) {
-            descriptor_hashing->null_descriptor_allowed = true;
+        if (global_settings.descriptor_hashing) {
+            descriptor_hashing = std::make_unique<DescriptorHashing>(global_settings.descriptor_hashing_total_descriptors);
+            if (IsExtEnabled(extensions.vk_ext_descriptor_heap)) {
+                descriptor_hashing->heap_all_descriptor_sizes = cached_descriptor_size.GetAllSizes(true);
+                for (VkDeviceSize size : descriptor_hashing->heap_all_descriptor_sizes) {
+                    if (size > descriptor_hashing->heap_max_descriptor_size) {
+                        descriptor_hashing->heap_max_descriptor_size = size;
+                    }
+                }
+            }
+            if (IsExtEnabled(extensions.vk_ext_descriptor_buffer)) {
+                descriptor_hashing->buffer_all_descriptor_sizes = cached_descriptor_size.GetAllSizes(false);
+                for (VkDeviceSize size : descriptor_hashing->buffer_all_descriptor_sizes) {
+                    if (size > descriptor_hashing->buffer_max_descriptor_size) {
+                        descriptor_hashing->buffer_max_descriptor_size = size;
+                    }
+                }
+            }
+
+            // |force_on_robustness| marks the "modified" feature so need to check for both
+            if (enabled_features.nullDescriptor || gpuav_settings.force_on_robustness) {
+                descriptor_hashing->null_descriptor_allowed = true;
+            }
         }
     } else if (global_settings.descriptor_hashing) {
         // In theory this shouldn't need to be turned off, but there are cases where we use
@@ -1553,11 +1556,15 @@ void DeviceState::PreCallRecordQueueSubmit(VkQueue queue, uint32_t submitCount, 
         submission.AddFence(Get<Fence>(fence));
         submissions.emplace_back(std::move(submission));
     }
+
     // Now process each individual submit
     for (uint32_t submit_i = 0; submit_i < submitCount; submit_i++) {
-        Location submit_loc = record_obj.location.dot(Struct::VkSubmitInfo, Field::pSubmits, submit_i);
-        QueueSubmission submission(submit_loc);
         const VkSubmitInfo* submit = &pSubmits[submit_i];
+        Location submit_loc = record_obj.location.dot(Struct::VkSubmitInfo, Field::pSubmits, submit_i);
+        if (auto frame_boundary = vku::FindStructInPNextChain<VkFrameBoundaryEXT>(submit->pNext)) {
+            submit_loc.frame_id = frame_boundary->frameID;
+        }
+        QueueSubmission submission(submit_loc);
         auto* timeline_info = vku::FindStructInPNextChain<VkTimelineSemaphoreSubmitInfo>(submit->pNext);
         for (uint32_t i = 0; i < submit->waitSemaphoreCount; ++i) {
             auto wait_semaphore = Get<Semaphore>(submit->pWaitSemaphores[i]);
@@ -1590,6 +1597,7 @@ void DeviceState::PreCallRecordQueueSubmit(VkQueue queue, uint32_t submitCount, 
         if (submit_i == (submitCount - 1) && fence != VK_NULL_HANDLE) {
             submission.AddFence(Get<Fence>(fence));
         }
+
         submissions.emplace_back(std::move(submission));
     }
 
@@ -1624,9 +1632,12 @@ void DeviceState::PreCallRecordQueueSubmit2(VkQueue queue, uint32_t submitCount,
     }
 
     for (uint32_t submit_i = 0; submit_i < submitCount; submit_i++) {
-        Location submit_loc = record_obj.location.dot(Struct::VkSubmitInfo2, Field::pSubmits, submit_i);
-        QueueSubmission submission(submit_loc);
         const VkSubmitInfo2KHR& submit = pSubmits[submit_i];
+        Location submit_loc = record_obj.location.dot(Struct::VkSubmitInfo2, Field::pSubmits, submit_i);
+        if (auto frame_boundary = vku::FindStructInPNextChain<VkFrameBoundaryEXT>(submit.pNext)) {
+            submit_loc.frame_id = frame_boundary->frameID;
+        }
+        QueueSubmission submission(submit_loc);
         for (const VkSemaphoreSubmitInfo& wait_sem_info : make_span(submit.pWaitSemaphoreInfos, submit.waitSemaphoreInfoCount)) {
             auto wait_semaphore = Get<Semaphore>(wait_sem_info.semaphore);
             ASSERT_AND_CONTINUE(wait_semaphore);
@@ -1648,6 +1659,7 @@ void DeviceState::PreCallRecordQueueSubmit2(VkQueue queue, uint32_t submitCount,
         if (submit_i == (submitCount - 1)) {
             submission.AddFence(Get<Fence>(fence));
         }
+
         submissions.emplace_back(std::move(submission));
     }
     queue_state->PreSubmit(std::move(submissions));
@@ -1702,10 +1714,10 @@ void DeviceState::PreCallRecordFreeMemory(VkDevice device, VkDeviceMemory mem, c
 #ifdef VK_USE_PLATFORM_WIN32_KHR
     {
         WriteLockGuard guard(win32_handle_map_lock_);
+        // Every call to vkGetMemoryWin32HandleKHR with an NT handle type creates a new HANDLE
         for (auto it = win32_handle_map_.begin(); it != win32_handle_map_.end();) {
             if (it->second.device_memory == mem) {
                 it = win32_handle_map_.erase(it);
-                break;
             } else {
                 ++it;
             }
@@ -1956,13 +1968,10 @@ void DeviceState::PostCallRecordQueueWaitIdle(VkQueue queue, const RecordObject&
         queue_state->NotifyAndWait(record_obj.location);
 
         // Reset semaphore's in-use-by-swapchain state.
-        // Only for pre-swapchain-maintenance1 code. New code should realy on presentation fence.
-        if (!IsExtEnabled(extensions.vk_khr_swapchain_maintenance1) && !IsExtEnabled(extensions.vk_ext_swapchain_maintenance1)) {
-            if (queue_state->is_used_for_presentation) {
-                for (const auto& entry : semaphore_map_.snapshot()) {
-                    const std::shared_ptr<vvl::Semaphore>& semaphore_state = entry.second;
-                    semaphore_state->ClearSwapchainWaitInfo();
-                }
+        if (queue_state->is_used_for_presentation) {
+            for (const auto& entry : semaphore_map_.snapshot()) {
+                const std::shared_ptr<vvl::Semaphore>& semaphore_state = entry.second;
+                semaphore_state->ClearSwapchainWaitInfo(queue);
             }
         }
     }
@@ -1994,12 +2003,9 @@ void DeviceState::PostCallRecordDeviceWaitIdle(VkDevice device, const RecordObje
         queue->Wait(record_obj.location);
     }
     // Reset semaphore's in-use-by-swapchain state.
-    // Only for pre-swapchain-maintenance1 code. New code should rely on the presentation fence.
-    if (!IsExtEnabled(extensions.vk_khr_swapchain_maintenance1) && !IsExtEnabled(extensions.vk_ext_swapchain_maintenance1)) {
-        for (const auto& entry : semaphore_map_.snapshot()) {
-            const std::shared_ptr<vvl::Semaphore>& semaphore_state = entry.second;
-            semaphore_state->ClearSwapchainWaitInfo();
-        }
+    for (const auto& entry : semaphore_map_.snapshot()) {
+        const std::shared_ptr<vvl::Semaphore>& semaphore_state = entry.second;
+        semaphore_state->ClearSwapchainWaitInfo();
     }
 }
 
@@ -2293,12 +2299,13 @@ void DeviceState::PreCallRecordDestroyPipelineCache(VkDevice device, VkPipelineC
     Destroy<PipelineCache>(pipelineCache);
 }
 
-std::shared_ptr<Pipeline> DeviceState::CreateGraphicsPipelineState(
-    const VkGraphicsPipelineCreateInfo* create_info, std::shared_ptr<const PipelineCache> pipeline_cache,
-    std::shared_ptr<const RenderPass>&& render_pass, std::shared_ptr<const PipelineLayout>&& layout,
-    spirv::StatelessData stateless_data[kCommonMaxGraphicsShaderStages]) const {
+std::shared_ptr<Pipeline> DeviceState::CreateGraphicsPipelineState(const VkGraphicsPipelineCreateInfo* create_info,
+                                                                   std::shared_ptr<const PipelineCache> pipeline_cache,
+                                                                   std::shared_ptr<const RenderPass>&& render_pass,
+                                                                   std::shared_ptr<const PipelineLayout>&& layout,
+                                                                   std::vector<spirv::StatelessData>& stateless_data) const {
     return std::make_shared<Pipeline>(*this, create_info, std::move(pipeline_cache), std::move(render_pass), std::move(layout),
-                                      stateless_data);
+                                      &stateless_data);
 }
 
 // PreCallValidate used here to have a single global spot to build the vvl::Pipeline object so we can use it right away
@@ -2311,8 +2318,10 @@ bool DeviceState::PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPipe
     // Set up the state that CoreChecks, gpu_validation and later StateTracker Record will use.
     pipeline_states.reserve(count);
     auto pipeline_cache = Get<PipelineCache>(pipelineCache);
+    chassis_state.stateless_data.resize(count);
     for (uint32_t i = 0; i < count; i++) {
         const auto& create_info = pCreateInfos[i];
+        chassis_state.stateless_data[i].resize(create_info.stageCount);
         auto layout_state = Get<PipelineLayout>(create_info.layout);
         std::shared_ptr<const RenderPass> render_pass;
 
@@ -2405,7 +2414,7 @@ bool DeviceState::PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPipe
             render_pass = std::make_shared<RenderPass>(rendering_ci);
         }
         pipeline_states.push_back(CreateGraphicsPipelineState(&create_info, pipeline_cache, std::move(render_pass),
-                                                              std::move(layout_state), chassis_state.stateless_data));
+                                                              std::move(layout_state), chassis_state.stateless_data[i]));
     }
     return skip;
 }
@@ -3433,7 +3442,7 @@ void DeviceState::PostCallRecordCmdBindIndexBuffer(VkCommandBuffer commandBuffer
 
     if (buffer == VK_NULL_HANDLE) {
         if (enabled_features.maintenance6) {
-            cb_state->index_buffer_binding.bound = true;
+            cb_state->index_buffer_binding = IndexBufferBinding(VK_NULL_HANDLE, 0, 0, indexType);
         }
     } else {
         auto buffer_state = Get<Buffer>(buffer);
@@ -3456,7 +3465,7 @@ void DeviceState::PostCallRecordCmdBindIndexBuffer2(VkCommandBuffer commandBuffe
 
     if (buffer == VK_NULL_HANDLE) {
         if (enabled_features.maintenance6) {
-            cb_state->index_buffer_binding.bound = true;
+            cb_state->index_buffer_binding = IndexBufferBinding(VK_NULL_HANDLE, 0, 0, indexType);
         }
     } else {
         auto buffer_state = Get<Buffer>(buffer);
@@ -4229,7 +4238,7 @@ void InstanceState::PostCallRecordCreateWin32SurfaceKHR(VkInstance instance, con
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    RecordVulkanSurface(pSurface, SurfaceType::Win32);
+    RecordVulkanSurface(pSurface, SurfaceType::Win32, CastToUint64(pCreateInfo->hwnd));
 }
 
 void DeviceState::PostCallRecordAcquireFullScreenExclusiveModeEXT(VkDevice device, VkSwapchainKHR swapchain,
@@ -4575,6 +4584,7 @@ void DeviceState::PostCallRecordQueuePresentKHR(VkQueue queue, const VkPresentIn
             }
         }
     }
+    semaphore_swapchain_info.queue = queue;
 
     small_vector<std::shared_ptr<vvl::Semaphore>, 1> present_wait_semaphores;
     for (uint32_t i = 0; i < pPresentInfo->waitSemaphoreCount; ++i) {
@@ -4626,6 +4636,11 @@ void DeviceState::PostCallRecordQueuePresentKHR(VkQueue queue, const VkPresentIn
         // For multi-swapchain present pResults are always available (chassis adds pResults if necessary)
         assert(pPresentInfo->swapchainCount < 2 || pPresentInfo->pResults);
         auto local_result = pPresentInfo->pResults ? pPresentInfo->pResults[i] : record_obj.result;
+
+        if (local_result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+            // The application is allowed to acquire exclusive full-screen access again
+            swapchain_data->exclusive_full_screen_access = false;
+        }
 
         // If the present timing queue reports as full, any waits would have been enqueued and therefore need to
         // be tracked here, however the presentation will be dropped
@@ -4766,9 +4781,19 @@ void DeviceState::RecordAcquireNextImageState(VkDevice device, VkSwapchainKHR sw
     }
 }
 
+void DeviceState::RecordFullScreenExclusiveModeLost(VkSwapchainKHR swapchain) {
+    // The application is allowed to acquire exclusive full-screen access again
+    if (auto swapchain_state = Get<Swapchain>(swapchain)) {
+        swapchain_state->exclusive_full_screen_access = false;
+    }
+}
+
 void DeviceState::PostCallRecordAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
                                                     VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex,
                                                     const RecordObject& record_obj) {
+    if (record_obj.result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+        RecordFullScreenExclusiveModeLost(swapchain);
+    }
     if ((VK_SUCCESS != record_obj.result) && (VK_SUBOPTIMAL_KHR != record_obj.result)) {
         return;
     }
@@ -4777,6 +4802,9 @@ void DeviceState::PostCallRecordAcquireNextImageKHR(VkDevice device, VkSwapchain
 
 void DeviceState::PostCallRecordAcquireNextImage2KHR(VkDevice device, const VkAcquireNextImageInfoKHR* pAcquireInfo,
                                                      uint32_t* pImageIndex, const RecordObject& record_obj) {
+    if (record_obj.result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+        RecordFullScreenExclusiveModeLost(pAcquireInfo->swapchain);
+    }
     if ((VK_SUCCESS != record_obj.result) && (VK_SUBOPTIMAL_KHR != record_obj.result)) {
         return;
     }
@@ -4927,7 +4955,9 @@ void InstanceState::PreCallRecordDestroySurfaceKHR(VkInstance instance, VkSurfac
     Destroy<Surface>(surface);
 }
 
-void InstanceState::RecordVulkanSurface(VkSurfaceKHR* pSurface, SurfaceType type) { Add(std::make_shared<Surface>(*pSurface, type)); }
+void InstanceState::RecordVulkanSurface(VkSurfaceKHR* pSurface, SurfaceType type, uint64_t native_window) {
+    Add(std::make_shared<Surface>(*pSurface, type, native_window));
+}
 
 void InstanceState::PostCallRecordCreateDisplayPlaneSurfaceKHR(VkInstance instance,
                                                                const VkDisplaySurfaceCreateInfoKHR* pCreateInfo,
@@ -4946,7 +4976,7 @@ void InstanceState::PostCallRecordCreateAndroidSurfaceKHR(VkInstance instance, c
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    RecordVulkanSurface(pSurface, SurfaceType::Android);
+    RecordVulkanSurface(pSurface, SurfaceType::Android, CastToUint64(pCreateInfo->window));
 }
 #endif  // VK_USE_PLATFORM_ANDROID_KHR
 
@@ -4969,7 +4999,7 @@ void InstanceState::PostCallRecordCreateIOSSurfaceMVK(VkInstance instance, const
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    RecordVulkanSurface(pSurface, SurfaceType::IOS_MVK);
+    RecordVulkanSurface(pSurface, SurfaceType::IOS_MVK, CastToUint64(pCreateInfo->pView));
 }
 #endif  // VK_USE_PLATFORM_IOS_MVK
 
@@ -4980,7 +5010,7 @@ void InstanceState::PostCallRecordCreateMacOSSurfaceMVK(VkInstance instance, con
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    RecordVulkanSurface(pSurface, SurfaceType::MacOS_MVK);
+    RecordVulkanSurface(pSurface, SurfaceType::MacOS_MVK, CastToUint64(pCreateInfo->pView));
 }
 #endif  // VK_USE_PLATFORM_MACOS_MVK
 
@@ -4991,7 +5021,7 @@ void InstanceState::PostCallRecordCreateMetalSurfaceEXT(VkInstance instance, con
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    RecordVulkanSurface(pSurface, SurfaceType::Metal);
+    RecordVulkanSurface(pSurface, SurfaceType::Metal, CastToUint64(pCreateInfo->pLayer));
 }
 #endif  // VK_USE_PLATFORM_METAL_EXT
 
@@ -5002,7 +5032,7 @@ void InstanceState::PostCallRecordCreateWaylandSurfaceKHR(VkInstance instance, c
     if (record_obj.result != VK_SUCCESS) {
         return;
     }
-    RecordVulkanSurface(pSurface, SurfaceType::Wayland);
+    RecordVulkanSurface(pSurface, SurfaceType::Wayland, CastToUint64(pCreateInfo->surface));
 }
 #endif  // VK_USE_PLATFORM_WAYLAND_KHR
 
@@ -5016,7 +5046,7 @@ void InstanceState::PostCallRecordCreateXcbSurfaceKHR(VkInstance instance, const
 #if defined(DEBUG_CAPTURE_KEYBOARD)
     xcb_connection = (void*)pCreateInfo->connection;
 #endif
-    RecordVulkanSurface(pSurface, SurfaceType::Xcb);
+    RecordVulkanSurface(pSurface, SurfaceType::Xcb, static_cast<uint64_t>(pCreateInfo->window));
 }
 #endif  // VK_USE_PLATFORM_XCB_KHR
 
@@ -5030,7 +5060,7 @@ void InstanceState::PostCallRecordCreateXlibSurfaceKHR(VkInstance instance, cons
 #if defined(DEBUG_CAPTURE_KEYBOARD)
     xlib_display = (void*)pCreateInfo->dpy;
 #endif
-    RecordVulkanSurface(pSurface, SurfaceType::Xlib);
+    RecordVulkanSurface(pSurface, SurfaceType::Xlib, static_cast<uint64_t>(pCreateInfo->window));
 }
 #endif  // VK_USE_PLATFORM_XLIB_KHR
 
@@ -5414,7 +5444,7 @@ void DeviceState::PostCallRecordCmdBeginQueryIndexedEXT(VkCommandBuffer commandB
     QueryCount query_count(*cb_state);
 
     for (uint32_t i = 0; i < query_count.count; ++i) {
-        QueryObject query_obj = {queryPool, slot, flags, 0, true, index + i};
+        QueryObject query_obj = {queryPool, slot + i, flags, 0, true, index + i};
         query_obj.inside_render_pass = query_count.inside_render_pass;
         query_obj.subpass = query_count.subpass;
         cb_state->RecordBeginQuery(query_obj, record_obj.location);
@@ -5437,7 +5467,7 @@ void DeviceState::PostCallRecordCmdEndQueryIndexedEXT(VkCommandBuffer commandBuf
     QueryCount query_count(*cb_state);
 
     for (uint32_t i = 0; i < query_count.count; ++i) {
-        QueryObject query_obj = {queryPool, slot, 0, 0, true, index + i};
+        QueryObject query_obj = {queryPool, slot + i, 0, 0, true, index + i};
         query_obj.inside_render_pass = query_count.inside_render_pass;
         query_obj.subpass = query_count.subpass;
         query_obj.end_command_index = cb_state->command_count;  // counting this command

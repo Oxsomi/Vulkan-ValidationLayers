@@ -96,9 +96,9 @@ bool CoreChecks::ValidateCmdDrawInstance(const LastBound& last_bound_state, uint
     const vvl::CommandBuffer& cb_state = last_bound_state.cb_state;
     const auto* pipeline_state = last_bound_state.pipeline_state;
 
-    // Verify maxMultiviewInstanceIndex
-    if (cb_state.active_render_pass && cb_state.active_render_pass->has_multiview_enabled &&
-        ((static_cast<uint64_t>(instanceCount) + static_cast<uint64_t>(firstInstance)) >
+    // Verify maxMultiviewInstanceIndex (the instance indices are firstInstance to firstInstance + instanceCount - 1)
+    if (cb_state.active_render_pass && cb_state.active_render_pass->has_multiview_enabled && instanceCount > 0 &&
+        ((static_cast<uint64_t>(instanceCount) + static_cast<uint64_t>(firstInstance) - 1) >
          static_cast<uint64_t>(phys_dev_props_core11.maxMultiviewInstanceIndex))) {
         skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::MAX_MULTIVIEW_INSTANCE_INDEX_02688),
                          cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
@@ -296,30 +296,37 @@ bool CoreChecks::ValidateCmdDrawIndexedBufferSize(const vvl::CommandBuffer& cb_s
         return skip;
     }
 
-    if (cb_state.index_buffer_binding.Buffer() == VK_NULL_HANDLE) {
-        // Missing VU https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/5322#note_591426
-        return skip;
-    }
-
     const uint32_t index_size = IndexTypeByteSize(cb_state.index_buffer_binding.index_type);
     // This doesn't exactly match the pseudocode of the VUID, but the binding size is the *bound* size, such that the offset
     // has already been accounted for (subtracted from the buffer size), and is consistent with the use of
     // BufferBinding::size for vertex buffer bindings (which record the *bound* size, not the size of the bound buffer)
-    VkDeviceSize end_offset = static_cast<VkDeviceSize>(index_size * (firstIndex + indexCount));
+    const VkDeviceSize end_offset = static_cast<VkDeviceSize>(index_size) * (static_cast<VkDeviceSize>(firstIndex) + indexCount);
     if (end_offset > cb_state.index_buffer_binding.size) {
         LogObjectList objlist = cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS);
-        objlist.add(cb_state.index_buffer_binding.Buffer());
-        const VkDeviceSize buffer_offset = cb_state.index_buffer_binding.BufferOffset();
+        if (const VkBuffer buffer = cb_state.index_buffer_binding.Handle(*device_state)) {
+            objlist.add(buffer);
+        }
         const char* vuid = loc.function == Func::vkCmdDrawMultiIndexedEXT
                                ? "VUID-vkCmdDrawMultiIndexedEXT-robustBufferAccess2-08798"
                                : "VUID-vkCmdDrawIndexed-robustBufferAccess2-08798";
-        skip |= LogError(vuid, objlist, loc,
-                         "index size (%" PRIu32 ") * (firstIndex (%" PRIu32 ") + indexCount (%" PRIu32
-                         ")) "
-                         "+ binding offset (%" PRIuLEAST64 ") = an ending offset of %" PRIuLEAST64
-                         " bytes, which is greater than the index buffer size (%" PRIuLEAST64 ").",
-                         index_size, firstIndex, indexCount, buffer_offset, end_offset + buffer_offset,
-                         cb_state.index_buffer_binding.size + buffer_offset);
+        if (cb_state.index_buffer_binding.Buffer() != VK_NULL_HANDLE) {
+            const VkDeviceSize buffer_offset = cb_state.index_buffer_binding.BufferOffset();
+            skip |= LogError(vuid, objlist, loc,
+                             "index size (%" PRIu32 ") * (firstIndex (%" PRIu32 ") + indexCount (%" PRIu32
+                             ")) "
+                             "+ binding offset (%" PRIuLEAST64 ") = an ending offset of %" PRIuLEAST64
+                             " bytes, which is greater than the index buffer size (%" PRIuLEAST64
+                             ").\nHint: This can be allowed if the robustBufferAccess2 feature is enabled.",
+                             index_size, firstIndex, indexCount, buffer_offset, end_offset + buffer_offset,
+                             cb_state.index_buffer_binding.size + buffer_offset);
+        } else {
+            skip |= LogError(vuid, objlist, loc,
+                             "index size (%" PRIu32 ") * (firstIndex (%" PRIu32 ") + indexCount (%" PRIu32 ")) = %" PRIuLEAST64
+                             " bytes, which is greater than the index buffer range size (%" PRIuLEAST64 ") at address 0x%" PRIx64
+                             ".\nHint: This can be allowed if the robustBufferAccess2 feature is enabled.",
+                             index_size, firstIndex, indexCount, end_offset, cb_state.index_buffer_binding.size,
+                             cb_state.index_buffer_binding.Address());
+        }
     }
 
     return skip;
@@ -768,7 +775,7 @@ bool CoreChecks::PreCallValidateCmdDrawIndirectCount(VkCommandBuffer commandBuff
         skip |= ValidateIndirectCmd(cb_state, *indirect_buffer_state, error_obj.location);
         skip |= ValidateCmdDrawStrideWithStruct(cb_state, "VUID-vkCmdDrawIndirectCount-stride-03110", stride,
                                                 Struct::VkDrawIndirectCommand, sizeof(VkDrawIndirectCommand), error_obj.location);
-        if (maxDrawCount > 1) {
+        if (maxDrawCount >= 1) {
             skip |= ValidateCmdDrawStrideWithBuffer(cb_state, "VUID-vkCmdDrawIndirectCount-maxDrawCount-03111", stride,
                                                     Struct::VkDrawIndirectCommand, sizeof(VkDrawIndirectCommand), maxDrawCount,
                                                     offset, *indirect_buffer_state, error_obj.location);
@@ -846,7 +853,7 @@ bool CoreChecks::PreCallValidateCmdDrawIndexedIndirectCount(VkCommandBuffer comm
     {
         auto indirect_buffer_state = Get<vvl::Buffer>(buffer);
         ASSERT_AND_RETURN_SKIP(indirect_buffer_state);
-        if (maxDrawCount > 1) {
+        if (maxDrawCount >= 1) {
             skip |= ValidateCmdDrawStrideWithBuffer(cb_state, "VUID-vkCmdDrawIndexedIndirectCount-maxDrawCount-03143", stride,
                                                     Struct::VkDrawIndexedIndirectCommand, sizeof(VkDrawIndexedIndirectCommand),
                                                     maxDrawCount, offset, *indirect_buffer_state, error_obj.location);
@@ -918,8 +925,9 @@ bool CoreChecks::PreCallValidateCmdDrawIndirectByteCountEXT(VkCommandBuffer comm
     if ((vertexStride <= 0) || (vertexStride > phys_dev_ext_props.transform_feedback_props.maxTransformFeedbackBufferDataStride)) {
         skip |= LogError("VUID-vkCmdDrawIndirectByteCountEXT-vertexStride-02289",
                          cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), error_obj.location.dot(Field::vertexStride),
-                         "(%" PRIu32 ") must be between 0 and maxTransformFeedbackBufferDataStride (%" PRIu32 ").", vertexStride,
-                         phys_dev_ext_props.transform_feedback_props.maxTransformFeedbackBufferDataStride);
+                         "(%" PRIu32
+                         ") must be greater than 0 and less than or equal to maxTransformFeedbackBufferDataStride (%" PRIu32 ").",
+                         vertexStride, phys_dev_ext_props.transform_feedback_props.maxTransformFeedbackBufferDataStride);
     }
 
     if (!IsIntegerMultipleOf(counterBufferOffset, 4)) {
@@ -977,32 +985,29 @@ bool CoreChecks::ValidateCmdTraceRaysKHR(const Location& loc, const LastBound& l
     if (pHitShaderBindingTable) {
         const Location table_loc = loc.dot(Field::pHitShaderBindingTable);
         if (pipeline_state->create_flags & VK_PIPELINE_CREATE_RAY_TRACING_NO_NULL_INTERSECTION_SHADERS_BIT_KHR) {
-            if ((pHitShaderBindingTable->size == 0 || pHitShaderBindingTable->stride == 0)) {
+            if (pHitShaderBindingTable->size == 0) {
                 const char* vuid =
                     is_indirect ? "VUID-vkCmdTraceRaysIndirectKHR-flags-03514" : "VUID-vkCmdTraceRaysKHR-flags-03514";
-                skip |= LogError(vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR), table_loc,
-                                 "either size (%" PRIu64 ") or stride (%" PRIu64 ") is zero.", pHitShaderBindingTable->size,
-                                 pHitShaderBindingTable->stride);
+                skip |= LogError(vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR), table_loc.dot(Field::size),
+                                 "is zero.");
             }
         }
         if (pipeline_state->create_flags & VK_PIPELINE_CREATE_RAY_TRACING_NO_NULL_CLOSEST_HIT_SHADERS_BIT_KHR) {
-            if ((pHitShaderBindingTable->size == 0 || pHitShaderBindingTable->stride == 0)) {
+            if (pHitShaderBindingTable->size == 0) {
                 const char* vuid =
                     is_indirect ? "VUID-vkCmdTraceRaysIndirectKHR-flags-03513" : "VUID-vkCmdTraceRaysKHR-flags-03513";
-                skip |= LogError(vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR), table_loc,
-                                 "either size (%" PRIu64 ") or stride (%" PRIu64 ") is zero.", pHitShaderBindingTable->size,
-                                 pHitShaderBindingTable->stride);
+                skip |= LogError(vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR), table_loc.dot(Field::size),
+                                 "is zero.");
             }
         }
         if (pipeline_state->create_flags & VK_PIPELINE_CREATE_RAY_TRACING_NO_NULL_ANY_HIT_SHADERS_BIT_KHR) {
             // No vuid to check for pHitShaderBindingTable->deviceAddress == 0 with this flag
 
-            if (pHitShaderBindingTable->size == 0 || pHitShaderBindingTable->stride == 0) {
+            if (pHitShaderBindingTable->size == 0) {
                 const char* vuid =
                     is_indirect ? "VUID-vkCmdTraceRaysIndirectKHR-flags-03512" : "VUID-vkCmdTraceRaysKHR-flags-03512";
-                skip |= LogError(vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR), table_loc,
-                                 "either size (%" PRIu64 ") or stride (%" PRIu64 ") is zero.", pHitShaderBindingTable->size,
-                                 pHitShaderBindingTable->stride);
+                skip |= LogError(vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR), table_loc.dot(Field::size),
+                                 "is zero.");
             }
         }
 
@@ -1213,7 +1218,7 @@ bool CoreChecks::PreCallValidateCmdDrawMeshTasksIndirectCountNV(VkCommandBuffer 
                                                 Struct::VkDrawMeshTasksIndirectCommandNV, sizeof(VkDrawMeshTasksIndirectCommandNV),
                                                 error_obj.location);
 
-        if (maxDrawCount > 1) {
+        if (maxDrawCount >= 1) {
             skip |=
                 ValidateCmdDrawStrideWithBuffer(cb_state, "VUID-vkCmdDrawMeshTasksIndirectCountNV-maxDrawCount-02183", stride,
                                                 Struct::VkDrawMeshTasksIndirectCommandNV, sizeof(VkDrawMeshTasksIndirectCommandNV),
@@ -1270,26 +1275,19 @@ bool CoreChecks::PreCallValidateCmdDrawMeshTasksEXT(VkCommandBuffer commandBuffe
 
     const uint32_t max_total_count = has_task ? phys_dev_ext_props.mesh_shader_props_ext.maxTaskWorkGroupTotalCount
                                               : phys_dev_ext_props.mesh_shader_props_ext.maxMeshWorkGroupTotalCount;
-    uint64_t invocations = static_cast<uint64_t>(groupCountX) * static_cast<uint64_t>(groupCountY);
-    // Prevent overflow.
-    bool fail = false;
-    if (invocations > vvl::kU32Max || invocations > max_total_count) {
-        fail = true;
-    }
-    if (!fail) {
-        invocations *= static_cast<uint64_t>(groupCountZ);
-        if (invocations > vvl::kU32Max || invocations > max_total_count) {
-            fail = true;
+
+    if (groupCountX != 0 && groupCountY != 0 && groupCountZ != 0) {
+        uint64_t xy = static_cast<uint64_t>(groupCountX) * groupCountY;
+        if (xy > max_total_count || xy * groupCountZ > max_total_count) {
+            const char* limit_vuid =
+                has_task ? "VUID-vkCmdDrawMeshTasksEXT-TaskEXT-07325" : "VUID-vkCmdDrawMeshTasksEXT-TaskEXT-07329";
+            skip |= LogError(limit_vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), error_obj.location,
+                             "The product of groupCountX (%" PRIu32 "), groupCountY (%" PRIu32 "), and groupCountZ (%" PRIu32
+                             ") must be less than or equal to "
+                             "VkPhysicalDeviceMeshShaderPropertiesEXT::%s (%" PRIu32 ").",
+                             groupCountX, groupCountY, groupCountZ,
+                             has_task ? "maxTaskWorkGroupTotalCount" : "maxMeshWorkGroupTotalCount", max_total_count);
         }
-    }
-    if (fail) {
-        const char* limit_vuid = has_task ? "VUID-vkCmdDrawMeshTasksEXT-TaskEXT-07325" : "VUID-vkCmdDrawMeshTasksEXT-TaskEXT-07329";
-        skip |= LogError(limit_vuid, cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), error_obj.location,
-                         "The product of groupCountX (%" PRIu32 "), groupCountY (%" PRIu32 "), and groupCountZ (%" PRIu32
-                         ") must be less than or equal to "
-                         "VkPhysicalDeviceMeshShaderPropertiesEXT::%s (%" PRIu32 ").",
-                         groupCountX, groupCountY, groupCountZ,
-                         has_task ? "maxTaskWorkGroupTotalCount" : "maxMeshWorkGroupTotalCount", max_total_count);
     }
 
     return skip;
@@ -1398,7 +1396,7 @@ bool CoreChecks::PreCallValidateCmdDrawMeshTasksIndirectCountEXT(VkCommandBuffer
         skip |= ValidateCmdDrawStrideWithStruct(cb_state, "VUID-vkCmdDrawMeshTasksIndirectCountEXT-stride-07096", stride,
                                                 Struct::VkDrawMeshTasksIndirectCommandEXT,
                                                 sizeof(VkDrawMeshTasksIndirectCommandEXT), error_obj.location);
-        if (maxDrawCount > 1) {
+        if (maxDrawCount >= 1) {
             skip |= ValidateCmdDrawStrideWithBuffer(cb_state, "VUID-vkCmdDrawMeshTasksIndirectCountEXT-maxDrawCount-07097", stride,
                                                     Struct::VkDrawMeshTasksIndirectCommandEXT,
                                                     sizeof(VkDrawMeshTasksIndirectCommandEXT), maxDrawCount, offset,
@@ -1908,7 +1906,7 @@ bool CoreChecks::ValidateActionStateDescriptorHeap(const LastBound& last_bound_s
                              "using VkCommandBufferInheritanceDescriptorHeapInfoEXT::pResourceHeapBindInfo, therefore making this "
                              "command buffer resource heap invalid.%s%s",
                              entry_point.Describe().c_str(), last_bound_state.DescribeInvalidDescriptorMode().c_str(),
-                             print_used_variables(true).c_str());
+                             print_used_variables(false).c_str());
         } else if (cb_state.IsPrimary()) {
             skip |= LogError(
                 CreateActionVuid(loc.function, vvl::ActionVUID::DESCRIPTOR_HEAP_11308),
@@ -1955,13 +1953,7 @@ bool CoreChecks::ValidateActionStateDescriptorHeapSamplers(const vvl::CommandBuf
         }
 
         for (const spirv::ResourceInterfaceVariable& resource_variable : entry_point.resource_interface_variables) {
-            const uint32_t descriptor_set = resource_variable.decorations.set;
-            const uint32_t descriptor_binding = resource_variable.decorations.binding;
-            // bindingCount could be UINT32_MAX
-            const uint64_t last_binding = mapping.firstBinding + uint64_t(mapping.bindingCount);
-
-            if (mapping.descriptorSet != descriptor_set || descriptor_binding < mapping.firstBinding ||
-                descriptor_binding >= last_binding) {
+            if (!IsResourceVariableInMapping(mapping, resource_variable)) {
                 continue;
             }
 
@@ -2476,26 +2468,28 @@ bool CoreChecks::ValidateDrawAttachmentColorBlend(const LastBound& last_bound_st
 
     const vvl::CommandBuffer& cb_state = last_bound_state.cb_state;
     const bool has_pipeline = last_bound_state.pipeline_state != nullptr;
+    const bool bound_frag_shader = last_bound_state.IsStageBound(VK_SHADER_STAGE_FRAGMENT_BIT);
 
+    // With shader objects, the color blend state is only used if a fragment shader is bound
+    // For pipelines, we need still need to look at the color blend state
     if (has_pipeline && !last_bound_state.pipeline_state->ColorBlendState()) {
         return skip;
-    }
-
-    if (last_bound_state.IsRasterizationDisabled()) {
+    } else if (!has_pipeline && !bound_frag_shader) {
+        return skip;
+    } else if (last_bound_state.IsRasterizationDisabled()) {
         return skip;
     }
 
-    if (last_bound_state.IsStageBound(VK_SHADER_STAGE_FRAGMENT_BIT)) {
-        if (enabled_features.colorWriteEnable && last_bound_state.IsDynamic(CB_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT) &&
-            cb_state.IsDynamicStateSet(CB_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT)) {
-            // Found in https://gitlab.khronos.org/vulkan/vulkan/-/issues/4116 that not setting all attachment can invalidate
-            // previous calls, so the last call needs to have set them all
-            const uint32_t blend_attachment_count = (uint32_t)cb_state.active_color_attachments_index.size();
-            const uint32_t dynamic_attachment_count = cb_state.dynamic_state_value.color_write_enable_attachment_count;
-            if (dynamic_attachment_count < blend_attachment_count) {
-                LogObjectList objlist = cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS);
-                skip |=
-                    LogError(CreateActionVuid(loc.function, vvl::ActionVUID::COLOR_WRITE_ENABLE_COUNT_07750), objlist, loc,
+    if (bound_frag_shader && enabled_features.colorWriteEnable &&
+        last_bound_state.IsDynamic(CB_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT) &&
+        cb_state.IsDynamicStateSet(CB_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT)) {
+        // Found in https://gitlab.khronos.org/vulkan/vulkan/-/issues/4116 that not setting all attachment can invalidate
+        // previous calls, so the last call needs to have set them all
+        const uint32_t blend_attachment_count = (uint32_t)cb_state.active_color_attachments_index.size();
+        const uint32_t dynamic_attachment_count = cb_state.dynamic_state_value.color_write_enable_attachment_count;
+        if (dynamic_attachment_count < blend_attachment_count) {
+            LogObjectList objlist = cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS);
+            skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::COLOR_WRITE_ENABLE_COUNT_07750), objlist, loc,
                              "There are currently (%" PRIu32
                              ") active color attachments, but the last call to vkCmdSetColorWriteEnableEXT() only set the color "
                              "write enables for attachmentCount of %" PRIu32
@@ -2503,7 +2497,6 @@ bool CoreChecks::ValidateDrawAttachmentColorBlend(const LastBound& last_bound_st
                              blend_attachment_count, dynamic_attachment_count,
                              cb_state.DescribeInvalidatedState(CB_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT).c_str(),
                              cb_state.DescribeActiveColorAttachment().c_str());
-            }
         }
     }
 
@@ -2813,7 +2806,8 @@ bool CoreChecks::ValidateDrawTessellation(const LastBound& last_bound_state, con
                          last_bound_state.cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                          "The subdivision specified in tessellation control shader (%s) does not match the subdivision in "
                          "tessellation evaluation shader (%s).",
-                         string_SpvExecutionMode(tesc_subdivision), string_SpvExecutionMode(tese_subdivision));
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tesc_subdivision)),
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tese_subdivision)));
     }
 
     const uint32_t tesc_orientation = tesc_execution_mode->GetTessellationOrientation();
@@ -2824,7 +2818,8 @@ bool CoreChecks::ValidateDrawTessellation(const LastBound& last_bound_state, con
                          last_bound_state.cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                          "The orientation specified in tessellation control shader (%s) does not match the orientation in "
                          "tessellation evaluation shader (%s).",
-                         string_SpvExecutionMode(tesc_orientation), string_SpvExecutionMode(tese_orientation));
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tesc_orientation)),
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tese_orientation)));
     }
 
     const uint32_t tesc_spacing = tesc_execution_mode->GetTessellationSpacing();
@@ -2834,7 +2829,8 @@ bool CoreChecks::ValidateDrawTessellation(const LastBound& last_bound_state, con
                          last_bound_state.cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                          "The spacing specified in tessellation control shader (%s) does not match the spacing in "
                          "tessellation evaluation shader (%s).",
-                         string_SpvExecutionMode(tesc_spacing), string_SpvExecutionMode(tese_spacing));
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tesc_spacing)),
+                         spv::ExecutionModeToString(static_cast<spv::ExecutionMode>(tese_spacing)));
     }
     const uint32_t tesc_patch_size = tesc_execution_mode->output_vertices;
     const uint32_t tese_patch_size = tese_execution_mode->output_vertices;
@@ -2896,10 +2892,6 @@ bool CoreChecks::ValidateDrawVertexBinding(const LastBound& last_bound, const Lo
     if (!vertex_entry_point) {
         return skip;
     }
-    vvl::unordered_set<uint32_t> spirv_input_locations;
-    for (const auto& pair : vertex_entry_point->input_interface_slots) {
-        spirv_input_locations.emplace(pair.first.Location());
-    }
 
     // It is ok to have binding descriptions not used, them and find if there is matching buffer tied to it or not
     for (const auto& [binding_index, binding_description] : vertex_bindings) {
@@ -2910,7 +2902,8 @@ bool CoreChecks::ValidateDrawVertexBinding(const LastBound& last_bound, const Lo
 
         bool shader_has_location = false;
         for (const auto& location : binding_description.locations) {
-            if (spirv_input_locations.find(location.first) != spirv_input_locations.end()) {
+            if (vertex_entry_point->input_interface_locations.find(location.first) !=
+                vertex_entry_point->input_interface_locations.end()) {
                 shader_has_location = true;
                 break;
             }
@@ -2972,11 +2965,13 @@ bool CoreChecks::ValidateDrawVertexBinding(const LastBound& last_bound, const Lo
             // No packed format has 64-bit components, so that exception only applies to the non-packed case
             const bool attrib_alignment_required =
                 !enabled_features.legacyVertexAttributes || (!is_packed_format && vkuFormatIs64bit(attr_desc.format));
-            if (attrib_alignment_required && vertex_buffer_handle != VK_NULL_HANDLE) {
+            if (attrib_alignment_required) {
                 const VkDeviceSize vertex_buffer_offset = vertex_buffer_binding->BufferOffset();
+                const VkDeviceSize binding_address =
+                    vertex_buffer_handle != VK_NULL_HANDLE ? vertex_buffer_offset : vertex_buffer_binding->Address();
 
                 // Use 1 as vertex/instance index to use buffer stride as well
-                const VkDeviceSize attrib_address = vertex_buffer_offset + vertex_buffer_binding->stride + attr_desc.offset;
+                const VkDeviceSize attrib_address = binding_address + vertex_buffer_binding->stride + attr_desc.offset;
 
                 VkDeviceSize vtx_attrib_req_alignment = GetVertexInputFormatSize(attr_desc.format);
 
@@ -2986,7 +2981,9 @@ bool CoreChecks::ValidateDrawVertexBinding(const LastBound& last_bound, const Lo
 
                 if (!IsPointerAligned(attrib_address, vtx_attrib_req_alignment)) {
                     LogObjectList objlist(last_bound.cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS));
-                    objlist.add(vertex_buffer_handle);
+                    if (const VkBuffer buffer = vertex_buffer_binding->Handle(*device_state)) {
+                        objlist.add(buffer);
+                    }
                     const vvl::ActionVUID vuid = is_packed_format ? vvl::ActionVUID::VERTEX_ATTRIBUTE_ALIGNMENT_10389
                                                                   : vvl::ActionVUID::VERTEX_ATTRIBUTE_ALIGNMENT_10390;
 
@@ -2994,13 +2991,22 @@ bool CoreChecks::ValidateDrawVertexBinding(const LastBound& last_bound, const Lo
                     ss << "pVertexAttributeDescriptions[" << attr_index << "] (location = " << attr_desc.location
                        << ", binding = " << attr_desc.binding << ") has format " << string_VkFormat(attr_desc.format) << " whose "
                        << (is_packed_format ? "packed texel block size" : "component size") << " is " << vtx_attrib_req_alignment
-                       << ", so attribAddress must be a multiple of " << vtx_attrib_req_alignment << " but is currently "
-                       << attrib_address << std::dec << " and is misaligned.\n"
-                       << "  bufferBindingAddress = base of " << FormatHandle(vertex_buffer_handle) << " + pOffsets["
-                       << attr_desc.binding << "] (" << vertex_buffer_offset << ")\n"
-                       << "  stride = " << vertex_buffer_binding->stride << "\n"
+                       << ", so attribAddress must be a multiple of " << vtx_attrib_req_alignment << " but is currently ";
+                    if (vertex_buffer_handle != VK_NULL_HANDLE) {
+                        ss << attrib_address << " and is misaligned.\n"
+                           << "  bufferBindingAddress = base of " << FormatHandle(vertex_buffer_handle) << " + pOffsets["
+                           << attr_desc.binding << "] (" << vertex_buffer_offset << ")\n";
+                    } else {
+                        ss << "0x" << std::hex << attrib_address << " and is misaligned.\n"
+                           << "  bufferBindingAddress = 0x" << binding_address << std::dec
+                           << " (from vkCmdBindVertexBuffers3KHR)\n";
+                    }
+                    ss << "  stride = " << vertex_buffer_binding->stride << "\n"
                        << "  attribute offset = " << attr_desc.offset << "\n"
                        << "  attribAddress = bufferBindingAddress + (stride * vertexIndex) + attribute offset\n";
+                    if (!enabled_features.legacyVertexAttributes && (is_packed_format || !vkuFormatIs64bit(attr_desc.format))) {
+                        ss << "Hint: This can be allowed if the legacyVertexAttributes feature is enabled.";
+                    }
 
                     skip |= LogError(CreateActionVuid(loc.function, vuid), objlist, loc, "%s", ss.str().c_str());
                 }
@@ -3083,7 +3089,8 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                 skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11522),
                                  cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                                  "%s::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound pipeline was not "
-                                 "created with a VkCustomResolveCreateInfoEXT struct",
+                                 "created with a VkCustomResolveCreateInfoEXT struct.\nHint: This can be allowed if the "
+                                 "dynamicRenderingUnusedAttachments feature is enabled.",
                                  String(flags_struct));
             }
         } else if (cb_sub_state.custom_resolve.started && !pipeline_cr_info->customResolve) {
@@ -3091,7 +3098,8 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                 skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11524),
                                  cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                                  "vkCmdBeginCustomResolveEXT was called in this render pass, but the bound pipeline "
-                                 "VkCustomResolveCreateInfoEXT::customResolve is VK_FALSE");
+                                 "VkCustomResolveCreateInfoEXT::customResolve is VK_FALSE.\nHint: This can be allowed if the "
+                                 "dynamicRenderingUnusedAttachments feature is enabled.");
             }
         } else if (!cb_sub_state.custom_resolve.started && pipeline_cr_info->customResolve) {
             // Exception if inside the seconary, as the vkCmdBeginCustomResolveEXT can be called prior to vkCmdExecuteCommands
@@ -3106,11 +3114,12 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                                      : "");
             }
         }
-    } else if (pipeline_cr_info) {
+    } else if (pipeline_cr_info && !enabled_features.dynamicRenderingUnusedAttachments) {
         skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11523),
                          cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                          "%s::flags did not include VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound pipeline was "
-                         "created with a VkCustomResolveCreateInfoEXT struct",
+                         "created with a VkCustomResolveCreateInfoEXT struct.\nHint: This can be allowed if the "
+                         "dynamicRenderingUnusedAttachments feature is enabled.",
                          String(flags_struct));
     }
 
@@ -3127,7 +3136,8 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                          cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                          "%s::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound pipeline "
                          "VkCustomResolveCreateInfoEXT::colorAttachmentCount (%" PRIu32
-                         ") doesn't match %s::colorAttachmentCount (%" PRIu32 ")",
+                         ") doesn't match %s::colorAttachmentCount (%" PRIu32
+                         ").\nHint: This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled.",
                          String(flags_struct), pipeline_cr_info->colorAttachmentCount, String(flags_struct),
                          rendering_info.colorAttachmentCount);
     }
@@ -3158,7 +3168,9 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                     cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
                     "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound "
                     "pipeline VkCustomResolveCreateInfoEXT::pColorAttachmentFormats[%" PRIu32
-                    "] (%s) doesn't match VkRenderingInfo::pColorAttachments[%" PRIu32 "]->resolveImageView (%s) created with %s",
+                    "] (%s) doesn't match VkRenderingInfo::pColorAttachments[%" PRIu32
+                    "]->resolveImageView (%s) created with %s.\nHint: If the dynamicRenderingUnusedAttachments feature "
+                    "is enabled, the pipeline format can also be VK_FORMAT_UNDEFINED.",
                     i, string_VkFormat(pipeline_cr_info->pColorAttachmentFormats[i]), i, FormatHandle(resolve_image_view).c_str(),
                     string_VkFormat(resolve_image_view_state->create_info.format));
             }
@@ -3170,7 +3182,8 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                              "VkRenderingInfo::pColorAttachments[%" PRIu32
                              "]->resolveImageView is VK_NULL_HANDLE, but the bound "
                              "pipeline VkCustomResolveCreateInfoEXT::pColorAttachmentFormats[%" PRIu32
-                             "] (%s) is not VK_FORMAT_UNDEFINED",
+                             "] (%s) is not VK_FORMAT_UNDEFINED.\nHint: This can be allowed if the "
+                             "dynamicRenderingUnusedAttachments feature is enabled.",
                              i, i, string_VkFormat(pipeline_cr_info->pColorAttachmentFormats[i]));
         }
     }
@@ -3180,12 +3193,14 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
         if (resolve_image_view == VK_NULL_HANDLE) {
             if (pipeline_cr_info->depthAttachmentFormat != VK_FORMAT_UNDEFINED &&
                 !enabled_features.dynamicRenderingUnusedAttachments) {
-                skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11865),
-                                 cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
-                                 "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, "
-                                 "VkRenderingInfo::pDepthAttachment->resolveImageView is VK_NULL_HANDLE, but the bound "
-                                 "pipeline VkCustomResolveCreateInfoEXT::depthAttachmentFormat (%s) is not VK_FORMAT_UNDEFINED",
-                                 string_VkFormat(pipeline_cr_info->depthAttachmentFormat));
+                skip |=
+                    LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11865),
+                             cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
+                             "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, "
+                             "VkRenderingInfo::pDepthAttachment->resolveImageView is VK_NULL_HANDLE, but the bound "
+                             "pipeline VkCustomResolveCreateInfoEXT::depthAttachmentFormat (%s) is not VK_FORMAT_UNDEFINED.\nHint: "
+                             "This can be allowed if the dynamicRenderingUnusedAttachments feature is enabled.",
+                             string_VkFormat(pipeline_cr_info->depthAttachmentFormat));
             }
         } else {
             auto resolve_image_view_state = Get<vvl::ImageView>(resolve_image_view);
@@ -3204,13 +3219,15 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                                  string_VkFormat(resolve_image_view_state->create_info.format));
                 }
             } else if (pipeline_cr_info->depthAttachmentFormat != resolve_image_view_state->create_info.format) {
-                skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11866),
-                                 cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
-                                 "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound "
-                                 "pipeline VkCustomResolveCreateInfoEXT::depthAttachmentFormat (%s) doesn't match "
-                                 "VkRenderingInfo::pDepthAttachment->resolveImageView (%s) created with %s",
-                                 string_VkFormat(pipeline_cr_info->depthAttachmentFormat), FormatHandle(resolve_image_view).c_str(),
-                                 string_VkFormat(resolve_image_view_state->create_info.format));
+                skip |= LogError(
+                    CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11866),
+                    cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
+                    "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound "
+                    "pipeline VkCustomResolveCreateInfoEXT::depthAttachmentFormat (%s) doesn't match "
+                    "VkRenderingInfo::pDepthAttachment->resolveImageView (%s) created with %s.\nHint: If the "
+                    "dynamicRenderingUnusedAttachments feature is enabled, the pipeline format can also be VK_FORMAT_UNDEFINED.",
+                    string_VkFormat(pipeline_cr_info->depthAttachmentFormat), FormatHandle(resolve_image_view).c_str(),
+                    string_VkFormat(resolve_image_view_state->create_info.format));
             }
         }
     }
@@ -3220,12 +3237,14 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
         if (resolve_image_view == VK_NULL_HANDLE) {
             if (pipeline_cr_info->stencilAttachmentFormat != VK_FORMAT_UNDEFINED &&
                 !enabled_features.dynamicRenderingUnusedAttachments) {
-                skip |= LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11868),
-                                 cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
-                                 "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, "
-                                 "VkRenderingInfo::pStencilAttachment->resolveImageView is VK_NULL_HANDLE, but the bound "
-                                 "pipeline VkCustomResolveCreateInfoEXT::stencilAttachmentFormat (%s) is not VK_FORMAT_UNDEFINED",
-                                 string_VkFormat(pipeline_cr_info->stencilAttachmentFormat));
+                skip |= LogError(
+                    CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11868),
+                    cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
+                    "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, "
+                    "VkRenderingInfo::pStencilAttachment->resolveImageView is VK_NULL_HANDLE, but the bound "
+                    "pipeline VkCustomResolveCreateInfoEXT::stencilAttachmentFormat (%s) is not VK_FORMAT_UNDEFINED.\nHint: This "
+                    "can be allowed if the dynamicRenderingUnusedAttachments feature is enabled.",
+                    string_VkFormat(pipeline_cr_info->stencilAttachmentFormat));
             }
         } else {
             auto resolve_image_view_state = Get<vvl::ImageView>(resolve_image_view);
@@ -3244,14 +3263,15 @@ bool CoreChecks::ValidateDrawCustomResolve(const LastBound& last_bound, const vv
                                      string_VkFormat(resolve_image_view_state->create_info.format));
                 }
             } else if (pipeline_cr_info->stencilAttachmentFormat != resolve_image_view_state->create_info.format) {
-                skip |=
-                    LogError(CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11869),
-                             cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
-                             "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound "
-                             "pipeline VkCustomResolveCreateInfoEXT::stencilAttachmentFormat (%s) doesn't match "
-                             "VkRenderingInfo::pStencilAttachment->resolveImageView (%s) created with %s",
-                             string_VkFormat(pipeline_cr_info->stencilAttachmentFormat), FormatHandle(resolve_image_view).c_str(),
-                             string_VkFormat(resolve_image_view_state->create_info.format));
+                skip |= LogError(
+                    CreateActionVuid(loc.function, vvl::ActionVUID::CUSTOM_RESOLVE_11869),
+                    cb_sub_state.base.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), loc,
+                    "VkRenderingInfo::flags includes VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT, but the bound "
+                    "pipeline VkCustomResolveCreateInfoEXT::stencilAttachmentFormat (%s) doesn't match "
+                    "VkRenderingInfo::pStencilAttachment->resolveImageView (%s) created with %s.\nHint: If the "
+                    "dynamicRenderingUnusedAttachments feature is enabled, the pipeline format can also be VK_FORMAT_UNDEFINED.",
+                    string_VkFormat(pipeline_cr_info->stencilAttachmentFormat), FormatHandle(resolve_image_view).c_str(),
+                    string_VkFormat(resolve_image_view_state->create_info.format));
             }
         }
     }

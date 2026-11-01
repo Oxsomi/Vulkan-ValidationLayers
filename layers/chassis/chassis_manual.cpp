@@ -392,6 +392,29 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateDevice(VkPhysicalDevice gpu, const VkDevice
         vo->PreCallRecordCreateDevice(gpu, pCreateInfo, pAllocator, pDevice, record_obj, &modified_create_info);
     }
 
+#if defined(VVL_WORKAROUND_QUALCOMM)
+    // The Adreno driver reads the trailing padding of the VkPhysicalDeviceVulkan1XFeatures structs and returns
+    // VK_ERROR_FEATURE_NOT_PRESENT if it is not zero. The safe struct copies above never write that padding, so it holds
+    // whatever the allocator last had there. (VkPhysicalDeviceVulkan11Features has no padding)
+    // This is fixed in driver version 512.840.0 but CI is only at 512.762.1 and will be awhile until that fix lands
+    const auto zero_trailing_padding = [](void* feature_struct, size_t struct_size, size_t end_of_last_member) {
+        std::memset(static_cast<uint8_t*>(feature_struct) + end_of_last_member, 0, struct_size - end_of_last_member);
+    };
+    void* modified_pnext = const_cast<void*>(modified_create_info.pNext);
+    if (auto* features = vku::FindStructInPNextChain<VkPhysicalDeviceVulkan12Features>(modified_pnext)) {
+        zero_trailing_padding(features, sizeof(*features),
+                              offsetof(VkPhysicalDeviceVulkan12Features, subgroupBroadcastDynamicId) + sizeof(VkBool32));
+    }
+    if (auto* features = vku::FindStructInPNextChain<VkPhysicalDeviceVulkan13Features>(modified_pnext)) {
+        zero_trailing_padding(features, sizeof(*features),
+                              offsetof(VkPhysicalDeviceVulkan13Features, maintenance4) + sizeof(VkBool32));
+    }
+    if (auto* features = vku::FindStructInPNextChain<VkPhysicalDeviceVulkan14Features>(modified_pnext)) {
+        zero_trailing_padding(features, sizeof(*features),
+                              offsetof(VkPhysicalDeviceVulkan14Features, pushDescriptor) + sizeof(VkBool32));
+    }
+#endif
+
     VkResult result = fpCreateDevice(gpu, reinterpret_cast<VkDeviceCreateInfo*>(&modified_create_info), pAllocator, pDevice);
 
     if (result != VK_SUCCESS) {
@@ -1116,6 +1139,62 @@ VKAPI_ATTR VkResult VKAPI_CALL CreateBuffer(VkDevice device, const VkBufferCreat
             }
             auto lock = vo->WriteLock();
             vo->PostCallRecordCreateBuffer(device, pCreateInfo, pAllocator, pBuffer, record_obj);
+        }
+    }
+    return result;
+}
+
+// This API needs the ability to modify a down-chain parameter
+VKAPI_ATTR VkResult VKAPI_CALL AllocateMemory(VkDevice device, const VkMemoryAllocateInfo* pAllocateInfo,
+                                              const VkAllocationCallbacks* pAllocator, VkDeviceMemory* pMemory) {
+    VVL_ZoneScoped;
+
+    auto device_dispatch = vvl::GetDispatchDevice(device);
+    bool skip = false;
+    ErrorObject error_obj(vvl::Func::vkAllocateMemory, VulkanTypedHandle(device, kVulkanObjectTypeDevice));
+
+    {
+        VVL_ZoneScopedN("PreCallValidate_AllocateMemory");
+        for (const auto& vo : device_dispatch->intercept_vectors[InterceptIdPreCallValidateAllocateMemory]) {
+            if (!vo) {
+                continue;
+            }
+            auto lock = vo->ReadLock();
+            skip |= vo->PreCallValidateAllocateMemory(device, pAllocateInfo, pAllocator, pMemory, error_obj);
+            if (skip) return VK_ERROR_VALIDATION_FAILED_EXT;
+        }
+    }
+
+    chassis::AllocateMemory chassis_state{};
+    chassis_state.allocate_info_copy = pAllocateInfo;
+
+    RecordObject record_obj(vvl::Func::vkAllocateMemory);
+    {
+        VVL_ZoneScopedN("PreCallRecord_AllocateMemory");
+        for (auto& vo : device_dispatch->object_dispatch) {
+            if (!vo) {
+                continue;
+            }
+            auto lock = vo->WriteLock();
+            vo->PreCallRecordAllocateMemory(device, pAllocateInfo, pAllocator, pMemory, record_obj, chassis_state);
+        }
+    }
+
+    VkResult result;
+    {
+        VVL_ZoneScopedN("Dispatch_AllocateMemory");
+        result = device_dispatch->AllocateMemory(device, chassis_state.allocate_info_copy, pAllocator, pMemory);
+    }
+    record_obj.result = result;
+
+    {
+        VVL_ZoneScopedN("PostCallRecord_AllocateMemory");
+        for (auto& vo : device_dispatch->intercept_vectors[InterceptIdPostCallRecordAllocateMemory]) {
+            if (!vo) {
+                continue;
+            }
+            auto lock = vo->WriteLock();
+            vo->PostCallRecordAllocateMemory(device, pAllocateInfo, pAllocator, pMemory, record_obj);
         }
     }
     return result;

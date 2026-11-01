@@ -240,6 +240,8 @@ target_sources(vvl PRIVATE
     sync/sync_image.h
     sync/sync_image_encoding.cpp
     sync/sync_image_encoding.h
+    sync/sync_queue_command.cpp
+    sync/sync_queue_command.h
     sync/sync_render_pass.cpp
     sync/sync_render_pass.h
     sync/sync_reporting.cpp
@@ -371,7 +373,6 @@ target_sources(vvl PRIVATE
     ${API_TYPE}/generated/extended_flags_helper_generator.h
     ${API_TYPE}/generated/extended_flags_helper_generator.cpp
     gpuav/core/gpuav.h
-    gpuav/core/gpuav_constants.h
     gpuav/core/gpuav_features.cpp
     gpuav/core/gpuav_record.cpp
     gpuav/core/gpuav_setup.cpp
@@ -415,6 +416,7 @@ target_sources(vvl PRIVATE
     gpuav/instrumentation/shared_memory_data_race.cpp
     gpuav/instrumentation/trace_ray.cpp
     gpuav/instrumentation/vertex_attribute_fetch_oob.cpp
+    gpuav/resources/gpuav_queue_state.h
     gpuav/resources/gpuav_state_trackers.cpp
     gpuav/resources/gpuav_state_trackers.h
     gpuav/resources/gpuav_shader_resources.h
@@ -556,10 +558,17 @@ target_sources(vvl PRIVATE
     layer_options_validation.h
     profiling/profiling.h
 )
+
 get_target_property(LAYER_SOURCES vvl SOURCES)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${LAYER_SOURCES})
 
 if(MSVC)
+    target_sources(vvl PRIVATE
+        types.natvis
+        external/parallel_hashmap/natvis/phmap.natvis
+        ${LAYER_NAME}.json.in
+    )
+
     set(GPUAV_SHADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gpuav/shaders")
     file(GLOB_RECURSE GPUAV_SHADERS
         "${GPUAV_SHADERS_DIR}/*.slang"
@@ -577,14 +586,16 @@ if (BUILD_SELF_VVL)
     target_compile_definitions(vvl PUBLIC BUILD_SELF_VVL)
 endif()
 
+option(VVL_WORKAROUND_QUALCOMM "Work around Qualcomm driver bugs (default: OFF)" OFF)
+if (VVL_WORKAROUND_QUALCOMM)
+    target_compile_definitions(vvl PRIVATE VVL_WORKAROUND_QUALCOMM)
+endif()
+
 set_target_properties(vvl PROPERTIES OUTPUT_NAME ${LAYER_NAME})
 
 if(MSVC)
     target_link_options(vvl PRIVATE /DEF:${CMAKE_CURRENT_SOURCE_DIR}/${LAYER_NAME}.def)
     target_compile_options(vvl PRIVATE /bigobj)
-
-    set(NATVIS_FILES "${CMAKE_CURRENT_SOURCE_DIR}/types.natvis" "${CMAKE_CURRENT_SOURCE_DIR}/external/parallel_hashmap/natvis/phmap.natvis")
-    target_sources(vvl PRIVATE ${NATVIS_FILES})
 elseif(MINGW)
     target_sources(vvl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/${LAYER_NAME}.def)
     target_compile_options(vvl PRIVATE -Wa,-mbig-obj)
@@ -670,6 +681,9 @@ if (VVL_ENABLE_TRACY)
 endif()
 
 target_include_directories(vvl SYSTEM PRIVATE external)
+
+# Enables the spv::*ToString() helpers in spirv.hpp
+target_compile_definitions(vvl PRIVATE SPV_ENABLE_UTILITY_CODE)
 
 # Found to significantly cut VVL build time
 #
@@ -758,18 +772,22 @@ add_custom_command(TARGET vvl POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${INTERMEDIATE_FILE} $<TARGET_FILE_DIR:vvl>/${OUTPUT_FILE_FINAL_NAME}
 )
 
-# Auto generate vk_layer_settings.txt upon setting changes
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-add_custom_command(
-    OUTPUT "${VVL_SOURCE_DIR}/layers/vk_layer_settings.txt" "${VVL_SOURCE_DIR}/layers/layer_options_validation.h"
-    COMMAND Python3::Interpreter "scripts/generate_settings.py"
-    DEPENDS "${VVL_SOURCE_DIR}/layers/VkLayer_khronos_validation.json.in"
-    WORKING_DIRECTORY ${VVL_SOURCE_DIR}
-)
-add_custom_target(vvl_generated_setting_files
-    DEPENDS "${VVL_SOURCE_DIR}/layers/vk_layer_settings.txt" "${VVL_SOURCE_DIR}/layers/layer_options_validation.h"
-)
-add_dependencies(vvl vvl_generated_setting_files)
+# Auto generate vk_layer_settings.txt upon setting changes.
+# Like vvl_codegen, this writes into the source tree, so keep it behind VVL_CODEGEN: the
+# generated files are checked in, and sandboxed/package builds have a read-only source tree.
+if (VVL_CODEGEN)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_custom_command(
+        OUTPUT "${VVL_SOURCE_DIR}/layers/vk_layer_settings.txt" "${VVL_SOURCE_DIR}/layers/layer_options_validation.h"
+        COMMAND Python3::Interpreter "scripts/generate_settings.py"
+        DEPENDS "${VVL_SOURCE_DIR}/layers/VkLayer_khronos_validation.json.in"
+        WORKING_DIRECTORY ${VVL_SOURCE_DIR}
+    )
+    add_custom_target(vvl_generated_setting_files
+        DEPENDS "${VVL_SOURCE_DIR}/layers/vk_layer_settings.txt" "${VVL_SOURCE_DIR}/layers/layer_options_validation.h"
+    )
+    add_dependencies(vvl vvl_generated_setting_files)
+endif()
 
 # For UNIX-based systems, `library_path` should not contain a relative path (indicated by "./") before installing to system directories
 # This json isn't used for regular local development, it's used for installation

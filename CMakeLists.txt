@@ -19,7 +19,7 @@ cmake_minimum_required(VERSION 3.22.1)
 # The VERSION field is generated with the "--generated-version" flag in the generate_source.py script
 #
 # If working with unreleased extensions, make sure the header and validation version are all on the same header version
-project(VVL VERSION 1.4.365 LANGUAGES CXX)
+project(VVL VERSION 1.4.367 LANGUAGES CXX)
 
 # This variable enables downstream users to customize the target API
 # variant (e.g. Vulkan SC)
@@ -254,11 +254,19 @@ add_subdirectory(layers)
 if(MSVC AND UPDATE_DEPS)
     set(SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/scripts")
     file(GLOB_RECURSE SCRIPTS
+        "${SCRIPTS_DIR}/*.txt"
         "${SCRIPTS_DIR}/*.py"
         "${SCRIPTS_DIR}/*.json"
+        "${SCRIPTS_DIR}/gn/*"
     )
-    add_custom_target(Scripts SOURCES ${SCRIPTS})
+    add_custom_target(Scripts SOURCES ${SCRIPTS} BUILD.gn)
     source_group(TREE ${SCRIPTS_DIR} PREFIX "Scripts" FILES ${SCRIPTS})
+    source_group("Scripts/gn" FILES BUILD.gn)
+
+    set(DOCS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/docs")
+    file(GLOB_RECURSE DOCS "${DOCS_DIR}/*.md")
+    add_custom_target(Docs SOURCES ${DOCS})
+    source_group(TREE ${DOCS_DIR} PREFIX "Docs" FILES ${DOCS})
 
     set(EXTERNAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external")
     file(GLOB_RECURSE EXTERNAL_HEADER_FILES

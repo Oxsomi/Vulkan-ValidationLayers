@@ -262,7 +262,7 @@ class InstanceState : public vvl::BaseInstance {
                                             const VkDisplayModeCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator,
                                             VkDisplayModeKHR* pMode, const RecordObject& record_obj) override;
 
-    void RecordVulkanSurface(VkSurfaceKHR* pSurface, SurfaceType type);
+    void RecordVulkanSurface(VkSurfaceKHR* pSurface, SurfaceType type, uint64_t native_window = 0);
     void PostCallRecordCreateDisplayPlaneSurfaceKHR(VkInstance instance, const VkDisplaySurfaceCreateInfoKHR* pCreateInfo,
                                                     const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface,
                                                     const RecordObject& record_obj) override;
@@ -934,10 +934,11 @@ class DeviceState : public vvl::BaseDevice {
     void PreCallRecordDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache, const VkAllocationCallbacks* pAllocator,
                                            const RecordObject& record_obj) override;
 
-    virtual std::shared_ptr<vvl::Pipeline> CreateGraphicsPipelineState(
-        const VkGraphicsPipelineCreateInfo* create_info, std::shared_ptr<const vvl::PipelineCache> pipeline_cache,
-        std::shared_ptr<const vvl::RenderPass>&& render_pass, std::shared_ptr<const vvl::PipelineLayout>&& layout,
-        spirv::StatelessData stateless_data[kCommonMaxGraphicsShaderStages]) const;
+    virtual std::shared_ptr<vvl::Pipeline> CreateGraphicsPipelineState(const VkGraphicsPipelineCreateInfo* create_info,
+                                                                       std::shared_ptr<const vvl::PipelineCache> pipeline_cache,
+                                                                       std::shared_ptr<const vvl::RenderPass>&& render_pass,
+                                                                       std::shared_ptr<const vvl::PipelineLayout>&& layout,
+                                                                       std::vector<spirv::StatelessData>& stateless_data) const;
     bool PreCallValidateCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t count,
                                                 const VkGraphicsPipelineCreateInfo* pCreateInfos,
                                                 const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines,
@@ -1722,6 +1723,7 @@ class DeviceState : public vvl::BaseDevice {
                                                     const vvl::DescriptorUpdateTemplate& template_state, const void* pData);
     void RecordAcquireNextImageState(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore,
                                      VkFence fence, uint32_t* pImageIndex, vvl::Func command);
+    void RecordFullScreenExclusiveModeLost(VkSwapchainKHR swapchain);
     virtual std::shared_ptr<vvl::Swapchain> CreateSwapchainState(const VkSwapchainCreateInfoKHR* create_info,
                                                                  VkSwapchainKHR handle);
     void RecordCreateSwapchainState(VkResult result, const VkSwapchainCreateInfoKHR* pCreateInfo, VkSwapchainKHR* pSwapchain,

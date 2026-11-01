@@ -181,47 +181,46 @@ bool Device::manual_PreCallValidateCmdSetVertexInputEXT(VkCommandBuffer commandB
 
     for (uint32_t binding = 0; binding < vertexBindingDescriptionCount; ++binding) {
         const Location binding_loc = error_obj.location.dot(Field::pVertexBindingDescriptions, binding);
-        if (pVertexBindingDescriptions[binding].binding >= phys_dev_props.limits.maxVertexInputBindings) {
+        const VkVertexInputBindingDescription2EXT& binding_desc = pVertexBindingDescriptions[binding];
+        if (binding_desc.binding >= phys_dev_props.limits.maxVertexInputBindings) {
             skip |=
                 LogError("VUID-VkVertexInputBindingDescription2EXT-binding-04796", commandBuffer, binding_loc.dot(Field::binding),
-                         "(%" PRIu32 ") is not less than maxVertexInputBindings (%" PRIu32 ").",
-                         pVertexBindingDescriptions[binding].binding, phys_dev_props.limits.maxVertexInputBindings);
+                         "(%" PRIu32 ") is not less than maxVertexInputBindings (%" PRIu32 ").", binding_desc.binding,
+                         phys_dev_props.limits.maxVertexInputBindings);
         }
 
-        if (pVertexBindingDescriptions[binding].stride > phys_dev_props.limits.maxVertexInputBindingStride) {
+        if (binding_desc.stride > phys_dev_props.limits.maxVertexInputBindingStride) {
             skip |= LogError("VUID-VkVertexInputBindingDescription2EXT-stride-04797", commandBuffer, binding_loc.dot(Field::stride),
-                             "(%" PRIu32 ") is greater than maxVertexInputBindingStride (%" PRIu32 ").",
-                             pVertexBindingDescriptions[binding].stride, phys_dev_props.limits.maxVertexInputBindingStride);
+                             "(%" PRIu32 ") is greater than maxVertexInputBindingStride (%" PRIu32 ").", binding_desc.stride,
+                             phys_dev_props.limits.maxVertexInputBindingStride);
         }
 
-        if (pVertexBindingDescriptions[binding].divisor == 0 && (!enabled_features.vertexAttributeInstanceRateZeroDivisor)) {
+        if (binding_desc.divisor == 0 && (!enabled_features.vertexAttributeInstanceRateZeroDivisor)) {
             skip |=
                 LogError("VUID-VkVertexInputBindingDescription2EXT-divisor-04798", commandBuffer, binding_loc.dot(Field::divisor),
                          "is zero, but the vertexAttributeInstanceRateZeroDivisor feature was not enabled.");
         }
 
-        if (pVertexBindingDescriptions[binding].divisor > 1) {
+        if (binding_desc.divisor != 1) {
             if (!enabled_features.vertexAttributeInstanceRateDivisor) {
                 skip |= LogError("VUID-VkVertexInputBindingDescription2EXT-divisor-04799", commandBuffer,
                                  binding_loc.dot(Field::divisor),
                                  "is %" PRIu32
-                                 " (greater than 1), but the vertexAttributeInstanceRateDivisor feature was not "
+                                 " (not 1), but the vertexAttributeInstanceRateDivisor feature was not "
                                  "enabled.",
-                                 pVertexBindingDescriptions[binding].divisor);
-            } else {
-                if (pVertexBindingDescriptions[binding].divisor > phys_dev_props_core14.maxVertexAttribDivisor) {
-                    skip |= LogError("VUID-VkVertexInputBindingDescription2EXT-divisor-06226", commandBuffer,
-                                     binding_loc.dot(Field::divisor),
-                                     "(%" PRIu32 ") is greater than maxVertexAttribDivisor (%" PRIu32 ")",
-                                     pVertexBindingDescriptions[binding].divisor, phys_dev_props_core14.maxVertexAttribDivisor);
-                }
+                                 binding_desc.divisor);
+            } else if (binding_desc.divisor > phys_dev_props_core14.maxVertexAttribDivisor) {
+                skip |=
+                    LogError("VUID-VkVertexInputBindingDescription2EXT-divisor-06226", commandBuffer,
+                             binding_loc.dot(Field::divisor), "(%" PRIu32 ") is greater than maxVertexAttribDivisor (%" PRIu32 ")",
+                             binding_desc.divisor, phys_dev_props_core14.maxVertexAttribDivisor);
+            }
 
-                if (pVertexBindingDescriptions[binding].inputRate != VK_VERTEX_INPUT_RATE_INSTANCE) {
-                    skip |= LogError("VUID-VkVertexInputBindingDescription2EXT-divisor-06227", commandBuffer,
-                                     binding_loc.dot(Field::divisor), "is %" PRIu32 " (greater than 1) but inputRate is %s.",
-                                     pVertexBindingDescriptions[binding].divisor,
-                                     string_VkVertexInputRate(pVertexBindingDescriptions[binding].inputRate));
-                }
+            if (binding_desc.inputRate != VK_VERTEX_INPUT_RATE_INSTANCE) {
+                skip |= LogError("VUID-VkVertexInputBindingDescription2EXT-divisor-06227", commandBuffer,
+                                 binding_loc.dot(Field::divisor),
+                                 "is %" PRIu32 " (not 1) but inputRate is %s (not VK_VERTEX_INPUT_RATE_INSTANCE).",
+                                 binding_desc.divisor, string_VkVertexInputRate(binding_desc.inputRate));
             }
         }
     }
@@ -389,17 +388,23 @@ bool Device::manual_PreCallValidateCmdSetColorBlendAdvancedEXT(VkCommandBuffer c
 
     for (uint32_t attachment = 0U; attachment < attachmentCount; ++attachment) {
         VkColorBlendAdvancedEXT const& advanced = pColorBlendAdvanced[attachment];
-        if (advanced.srcPremultiplied == VK_TRUE &&
+        if (!IsAdvanceBlendOperation(advanced.advancedBlendOp)) {
+            // VUID being added https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8658
+            skip |= LogError("UNASSIGNED-VkColorBlendAdvancedEXT-advancedBlendOp", commandBuffer,
+                             error_obj.location.dot(Field::pColorBlendAdvanced, attachment).dot(Field::advancedBlendOp),
+                             "is %s, which is not an advanced blend operation.", string_VkBlendOp(advanced.advancedBlendOp));
+        }
+        if (advanced.srcPremultiplied != VK_TRUE &&
             !phys_dev_ext_props.blend_operation_advanced_props.advancedBlendNonPremultipliedSrcColor) {
             skip |= LogError("VUID-VkColorBlendAdvancedEXT-srcPremultiplied-07505", commandBuffer,
                              error_obj.location.dot(Field::pColorBlendAdvanced, attachment).dot(Field::srcPremultiplied),
-                             "is VK_TRUE but the advancedBlendNonPremultipliedSrcColor feature was not enabled.");
+                             "is VK_FALSE, but advancedBlendNonPremultipliedSrcColor is not supported.");
         }
-        if (advanced.dstPremultiplied == VK_TRUE &&
+        if (advanced.dstPremultiplied != VK_TRUE &&
             !phys_dev_ext_props.blend_operation_advanced_props.advancedBlendNonPremultipliedDstColor) {
             skip |= LogError("VUID-VkColorBlendAdvancedEXT-dstPremultiplied-07506", commandBuffer,
                              error_obj.location.dot(Field::pColorBlendAdvanced, attachment).dot(Field::dstPremultiplied),
-                             "is VK_TRUE but the advancedBlendNonPremultipliedDstColor feature was not enabled.");
+                             "is VK_FALSE, but advancedBlendNonPremultipliedDstColor is not supported.");
         }
         if (advanced.blendOverlap != VK_BLEND_OVERLAP_UNCORRELATED_EXT &&
             !phys_dev_ext_props.blend_operation_advanced_props.advancedBlendCorrelatedOverlap) {

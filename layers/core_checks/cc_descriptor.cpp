@@ -244,7 +244,7 @@ bool CoreChecks::ValidateCmdBindDescriptorSets(const vvl::CommandBuffer& cb_stat
     uint32_t total_dynamic_descriptors = 0;
 
     // If we detect we are binding to many sets, the extra sets will always be incompatible, so check first
-    if ((firstSet + descriptorSetCount) > static_cast<uint32_t>(pipeline_layout->set_layouts.list.size())) {
+    if ((static_cast<uint64_t>(firstSet) + descriptorSetCount) > pipeline_layout->set_layouts.list.size()) {
         const char* vuid = is_2 ? "VUID-VkBindDescriptorSetsInfo-firstSet-00360" : "VUID-vkCmdBindDescriptorSets-firstSet-00360";
         const LogObjectList objlist(cb_state.Handle(), layout);
         skip |= LogError(vuid, objlist, loc.dot(Field::firstSet),
@@ -431,7 +431,10 @@ bool CoreChecks::ValidateCmdBindDescriptorSets(const vvl::CommandBuffer& cb_stat
             const LogObjectList objlist(cb_state.Handle(), set_handle);
             const char* vuid =
                 is_2 ? "VUID-VkBindDescriptorSetsInfo-pDescriptorSets-06563" : "VUID-vkCmdBindDescriptorSets-pDescriptorSets-06563";
-            skip |= LogError(vuid, objlist, set_loc, "(%s) is not a valid VkDescriptorSet.", FormatHandle(set_handle).c_str());
+            skip |= LogError(vuid, objlist, set_loc, "(%s) is not a valid VkDescriptorSet.%s", FormatHandle(set_handle).c_str(),
+                             set_handle == VK_NULL_HANDLE
+                                 ? "\nHint: VK_NULL_HANDLE can be allowed if the graphicsPipelineLibrary feature is enabled."
+                                 : "");
         }
     }
     //  dynamicOffsetCount must equal the total number of dynamic descriptors in the sets being bound
@@ -1050,6 +1053,13 @@ bool CoreChecks::ValidateCopyUpdate(const VkCopyDescriptorSet& update, const Loc
             const LogObjectList objlist(update.srcSet, src_layout.Handle());
             return LogError("VUID-VkCopyDescriptorSet-srcBinding-00345", objlist, copy_loc.dot(Field::srcBinding),
                             "(%" PRIu32 ") does not exist in %s.", update.srcBinding, FormatHandle(src_set->Handle()).c_str());
+        } else if (src_layout.GetDescriptorCountFromBinding(update.srcBinding) == 0) {
+            const LogObjectList objlist(update.srcSet, src_layout.Handle());
+            // VUID being added https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8657
+            return LogError("UNASSIGNED-VkCopyDescriptorSet-srcBinding-zero-descriptorCount", objlist,
+                            copy_loc.dot(Field::srcBinding),
+                            "(%" PRIu32 ") has VkDescriptorSetLayoutBinding::descriptorCount of zero in %s.", update.srcBinding,
+                            FormatHandle(src_layout.Handle()).c_str());
         }
 
         uint32_t src_start_idx = src_set->GetGlobalIndexRangeFromBinding(update.srcBinding).begin + update.srcArrayElement;
@@ -1075,6 +1085,13 @@ bool CoreChecks::ValidateCopyUpdate(const VkCopyDescriptorSet& update, const Loc
             const LogObjectList objlist(update.dstSet, dst_layout.Handle());
             return LogError("VUID-VkCopyDescriptorSet-dstBinding-00347", objlist, copy_loc.dot(Field::dstBinding),
                             "(%" PRIu32 ") does not exist in %s.", update.dstBinding, FormatHandle(dst_set->Handle()).c_str());
+        } else if (dst_layout.GetDescriptorCountFromBinding(update.dstBinding) == 0) {
+            const LogObjectList objlist(update.dstSet, dst_layout.Handle());
+            // VUID being added https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8657
+            return LogError("UNASSIGNED-VkCopyDescriptorSet-dstBinding-zero-descriptorCount", objlist,
+                            copy_loc.dot(Field::dstBinding),
+                            "(%" PRIu32 ") has VkDescriptorSetLayoutBinding::descriptorCount of zero in %s.", update.dstBinding,
+                            FormatHandle(dst_layout.Handle()).c_str());
         }
 
         uint32_t dst_start_idx = dst_layout.GetGlobalIndexRangeFromBinding(update.dstBinding).begin + update.dstArrayElement;
@@ -1256,9 +1273,11 @@ bool CoreChecks::ValidateCopyUpdateDescriptorTypes(const VkCopyDescriptorSet& up
     }
 
     if (dst_type == VK_DESCRIPTOR_TYPE_MUTABLE_EXT) {
-        dst_type =
-            static_cast<const vvl::MutableDescriptor*>(dst_set.GetDescriptorFromBinding(update.dstBinding, update.dstArrayElement))
-                ->ActiveType();
+        // dstArrayElement can go past dstBinding (consecutive binding updates)
+        auto dst_iter = dst_set.FindDescriptor(update.dstBinding, update.dstArrayElement);
+        if (dst_iter.IsValid() && dst_iter.CurrentBinding().type == VK_DESCRIPTOR_TYPE_MUTABLE_EXT) {
+            dst_type = static_cast<const vvl::MutableDescriptor&>(*dst_iter).ActiveType();
+        }
     }
     if (dst_type == VK_DESCRIPTOR_TYPE_SAMPLER) {
         auto dst_iter = dst_set.FindDescriptor(update.dstBinding, update.dstArrayElement);
@@ -1806,8 +1825,8 @@ bool CoreChecks::ValidateWriteUpdate(const vvl::DescriptorSet& dst_set, const Vk
                         dsl_error_source.PrintMessage(*this).c_str());
     } else if (update.dstBinding > dst_layout->GetMaxBinding()) {
         return LogError("VUID-VkWriteDescriptorSet-dstBinding-00315", dst_layout->Handle(), dst_binding_loc,
-                        "(%" PRIu32 ") is larger than bindingCount (%" PRIu32 ") used to create %s.\n%s", update.dstBinding,
-                        dst_layout->GetBindingCount(), FormatHandle(dst_layout->Handle()).c_str(),
+                        "(%" PRIu32 ") is larger than the largest binding number (%" PRIu32 ") in %s.\n%s", update.dstBinding,
+                        dst_layout->GetMaxBinding(), FormatHandle(dst_layout->Handle()).c_str(),
                         dsl_error_source.PrintMessage(*this).c_str());
     }
 
@@ -1935,7 +1954,7 @@ bool CoreChecks::ValidateWriteUpdate(const vvl::DescriptorSet& dst_set, const Vk
                                      ") was created with %s\n"
                                      "The descriptorCount was %" PRIu32 " and the offset of %" PRIu32 " references binding %" PRIu32
                                      " which was created with %s.\n"
-                                     "When doing consecutive binding updates, the stageFlags must match for each binding.",
+                                     "When doing consecutive binding updates, the binding flags must match for each binding.",
                                      update.dstBinding, string_VkDescriptorBindingFlags(binding_flags).c_str(),
                                      update.descriptorCount, i, current_binding->binding,
                                      string_VkDescriptorBindingFlags(current_binding->binding_flags).c_str());
@@ -2660,6 +2679,8 @@ bool CoreChecks::ValidateCmdSetDescriptorBufferOffsets(const vvl::CommandBuffer&
                          ") is applied to the address, there are no VkBuffer found at 0x%" PRIx64
                          " and you are out-of-bounds of any valid descriptor buffer.",
                          buffer_index, start, PrintBufferRanges(*this, buffer_states).c_str(), i, offset, start + offset);
+        } else if (set_layout->GetBindingCount() == 0) {
+            continue;  // The layout has no descriptors, so nothing at this offset can be out of bounds
         } else {
             VkDeviceSize set_layout_size = set_layout->GetLayoutSizeInBytes();
             if (set_layout_size > 0) {
@@ -3967,8 +3988,8 @@ bool CoreChecks::PreCallValidateAllocateDescriptorSets(VkDevice device, const Vk
             skip |= LogError("VUID-VkDescriptorSetAllocateInfo-apiVersion-07895", ds_pool_state->Handle(),
                              allocate_info_loc.dot(Field::descriptorSetCount),
                              "is %" PRIu32 " which is not enough as %s only has %" PRIu32
-                             " descriptorSets remaining. (With VK_KHR_maintenance1 enabled, the driver will return "
-                             "VK_ERROR_OUT_OF_POOL_MEMORY_KHR in this situation).",
+                             " descriptorSets remaining.\nHint: With VK_KHR_maintenance1 enabled, the driver will return "
+                             "VK_ERROR_OUT_OF_POOL_MEMORY_KHR in this situation.",
                              pAllocateInfo->descriptorSetCount, FormatHandle(*ds_pool_state).c_str(),
                              ds_pool_state->GetAvailableSets());
         }
@@ -3977,13 +3998,15 @@ bool CoreChecks::PreCallValidateAllocateDescriptorSets(VkDevice device, const Vk
             const uint32_t available_count = ds_pool_state->GetAvailableCount(it->first);
 
             if (ds_data.required_descriptors_by_type.at(it->first) > available_count) {
-                skip |= LogError("VUID-VkDescriptorSetAllocateInfo-apiVersion-07896", ds_pool_state->Handle(), error_obj.location,
-                                 "Unable to allocate %" PRIu32
-                                 " descriptors of type %s from %s"
-                                 ". This pool only has %" PRIu32 " descriptors of this type remaining.",
-                                 ds_data.required_descriptors_by_type.at(it->first),
-                                 string_VkDescriptorType(VkDescriptorType(it->first)), FormatHandle(*ds_pool_state).c_str(),
-                                 available_count);
+                skip |= LogError(
+                    "VUID-VkDescriptorSetAllocateInfo-apiVersion-07896", ds_pool_state->Handle(), error_obj.location,
+                    "Unable to allocate %" PRIu32
+                    " descriptors of type %s from %s"
+                    ". This pool only has %" PRIu32
+                    " descriptors of this type remaining.\nHint: With VK_KHR_maintenance1 enabled, the driver will return "
+                    "VK_ERROR_OUT_OF_POOL_MEMORY_KHR in this situation.",
+                    ds_data.required_descriptors_by_type.at(it->first), string_VkDescriptorType(VkDescriptorType(it->first)),
+                    FormatHandle(*ds_pool_state).c_str(), available_count);
             }
         }
     } else if (!global_settings.only_report_errors) {
@@ -4473,6 +4496,12 @@ static std::valarray<uint64_t> GetDescriptorCountMaxPerStage(
         stage_flags.push_back(VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
         stage_flags.push_back(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
     }
+    if (enabled_features->taskShader) {
+        stage_flags.push_back(VK_SHADER_STAGE_TASK_BIT_EXT);
+    }
+    if (enabled_features->meshShader) {
+        stage_flags.push_back(VK_SHADER_STAGE_MESH_BIT_EXT);
+    }
     if (enabled_features->rayTracingPipeline) {
         stage_flags.push_back(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
         stage_flags.push_back(VK_SHADER_STAGE_ANY_HIT_BIT_KHR);
@@ -4805,7 +4834,9 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
             skip |= LogError("VUID-VkPipelineLayoutCreateInfo-descriptorType-03030", device, error_obj.location,
                              "sum of dynamic uniform buffer bindings among all stages (%" PRIu64
                              ") exceeds device "
-                             "maxDescriptorSetUniformBuffersDynamic limit (%" PRIu32 ").",
+                             "maxDescriptorSetUniformBuffersDynamic limit (%" PRIu32
+                             ").\nHint: If the maintenance7 feature is enabled, the limits in "
+                             "VkPhysicalDeviceMaintenance7PropertiesKHR are used instead.",
                              sum_all_stages[VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC],
                              phys_dev_props.limits.maxDescriptorSetUniformBuffersDynamic);
         }
@@ -4816,7 +4847,9 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
             skip |= LogError("VUID-VkPipelineLayoutCreateInfo-descriptorType-03032", device, error_obj.location,
                              "sum of dynamic storage buffer bindings among all stages (%" PRIu64
                              ") exceeds device "
-                             "maxDescriptorSetStorageBuffersDynamic limit (%" PRIu32 ").",
+                             "maxDescriptorSetStorageBuffersDynamic limit (%" PRIu32
+                             ").\nHint: If the maintenance7 feature is enabled, the limits in "
+                             "VkPhysicalDeviceMaintenance7PropertiesKHR are used instead.",
                              sum_all_stages[VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC],
                              phys_dev_props.limits.maxDescriptorSetStorageBuffersDynamic);
         }
@@ -5100,7 +5133,9 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
                 skip |= LogError("VUID-VkPipelineLayoutCreateInfo-pSetLayouts-03038", device, error_obj.location,
                                  "sum of dynamic uniform buffer bindings among all stages (%" PRIu64
                                  ") exceeds both the maxDescriptorSetUpdateAfterBindUniformBuffersDynamic (%" PRIu32
-                                 ") and maxDescriptorSetUniformBuffersDynamic (%" PRIu32 ") limit.",
+                                 ") and maxDescriptorSetUniformBuffersDynamic (%" PRIu32
+                                 ") limit.\nHint: If the maintenance7 feature is enabled, the limits in "
+                                 "VkPhysicalDeviceMaintenance7PropertiesKHR are used instead.",
                                  sum_all_stages_update_after_bind[VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC],
                                  phys_dev_props_core12.maxDescriptorSetUpdateAfterBindUniformBuffersDynamic,
                                  phys_dev_props.limits.maxDescriptorSetUniformBuffersDynamic);
@@ -5114,7 +5149,9 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
                 skip |= LogError("VUID-VkPipelineLayoutCreateInfo-pSetLayouts-03040", device, error_obj.location,
                                  "sum of dynamic storage buffer bindings among all stages (%" PRIu64
                                  ") exceeds both the maxDescriptorSetUpdateAfterBindStorageBuffersDynamic (%" PRIu32
-                                 ") and maxDescriptorSetStorageBuffersDynamic (%" PRIu32 ") limit.",
+                                 ") and maxDescriptorSetStorageBuffersDynamic (%" PRIu32
+                                 ") limit.\nHint: If the maintenance7 feature is enabled, the limits in "
+                                 "VkPhysicalDeviceMaintenance7PropertiesKHR are used instead.",
                                  sum_all_stages_update_after_bind[VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC],
                                  phys_dev_props_core12.maxDescriptorSetUpdateAfterBindStorageBuffersDynamic,
                                  phys_dev_props.limits.maxDescriptorSetStorageBuffersDynamic);
@@ -5229,7 +5266,7 @@ bool CoreChecks::PreCallValidateCreatePipelineLayout(VkDevice device, const VkPi
                              "sum of sampler bindings with flags containing "
                              "VK_SAMPLER_CREATE_SUBSAMPLED_BIT_EXT or "
                              "VK_SAMPLER_CREATE_SUBSAMPLED_COARSE_RECONSTRUCTION_BIT_EXT among all stages(% d) "
-                             "exceeds device maxDescriptorSetSubsampledSamplers limit (%" PRIu32 ").",
+                             "is greater than maxDescriptorSetSubsampledSamplers limit (%" PRIu32 ").",
                              sum_subsampled_samplers,
                              phys_dev_ext_props.fragment_density_map2_props.maxDescriptorSetSubsampledSamplers);
         }
@@ -5706,7 +5743,7 @@ bool CoreChecks::PreCallValidateGetImageOpaqueCaptureDataEXT(VkDevice device, ui
         ASSERT_AND_CONTINUE(image_state);
         if ((image_state->create_flags & VK_IMAGE_CREATE_DESCRIPTOR_HEAP_CAPTURE_REPLAY_BIT_EXT) == 0) {
             skip |=
-                LogError("VUID-vkGetImageOpaqueCaptureDataEXT-pImages-11285", pImages[i], error_obj.location.dot(Field::pImage, i),
+                LogError("VUID-vkGetImageOpaqueCaptureDataEXT-pImages-11285", pImages[i], error_obj.location.dot(Field::pImages, i),
                          "was created with %s, but needs to have VK_IMAGE_CREATE_DESCRIPTOR_HEAP_CAPTURE_REPLAY_BIT_EXT.",
                          string_VkImageCreateFlags2KHR(image_state->create_flags).c_str());
         }
@@ -5927,6 +5964,7 @@ bool CoreChecks::ValidateInheritanceDescriptorHeapInfo(const vvl::CommandBuffer&
                 vuid = "VUID-vkCmdPushConstants-commandBuffer-11295";
                 break;
             case Func::vkCmdPushConstants2:
+            case Func::vkCmdPushConstants2KHR:
                 vuid = "VUID-vkCmdPushConstants2-commandBuffer-11295";
                 break;
             case Func::vkCmdBindDescriptorBuffersEXT:
@@ -5948,7 +5986,7 @@ bool CoreChecks::ValidateInheritanceDescriptorHeapInfo(const vvl::CommandBuffer&
                 break;
         }
         const LogObjectList objlist(cb_state.Handle(), cb_state.allocate_info.commandPool);
-        skip |= LogError(vuid, objlist, loc.dot(Field::commandBuffer),
+        skip |= LogError(vuid, objlist, Location(loc.function, Field::commandBuffer),
                          "began with a non-null VkCommandBufferInheritanceDescriptorHeapInfoEXT::pSamplerHeapBindInfo (%s)\nHint: "
                          "By being non-null it acts as if vkCmdBindSamplerHeapEXT was called for this secondary command buffer.",
                          cb_state.descriptor_heap.Describe(true).c_str());
@@ -5983,6 +6021,7 @@ bool CoreChecks::ValidateInheritanceDescriptorHeapInfo(const vvl::CommandBuffer&
                 vuid = "VUID-vkCmdPushConstants-commandBuffer-11296";
                 break;
             case Func::vkCmdPushConstants2:
+            case Func::vkCmdPushConstants2KHR:
                 vuid = "VUID-vkCmdPushConstants2-commandBuffer-11296";
                 break;
             case Func::vkCmdBindDescriptorBuffersEXT:
@@ -6004,7 +6043,7 @@ bool CoreChecks::ValidateInheritanceDescriptorHeapInfo(const vvl::CommandBuffer&
                 break;
         }
         const LogObjectList objlist(cb_state.Handle(), cb_state.allocate_info.commandPool);
-        skip |= LogError(vuid, objlist, loc.dot(Field::commandBuffer),
+        skip |= LogError(vuid, objlist, Location(loc.function, Field::commandBuffer),
                          "began with a non-null VkCommandBufferInheritanceDescriptorHeapInfoEXT::pResourceHeapBindInfo (%s)\nHint: "
                          "By being non-null it acts as if vkCmdBindResourceHeapEXT was called for this secondary command buffer.",
                          cb_state.descriptor_heap.Describe(false).c_str());
@@ -6058,7 +6097,7 @@ bool CoreChecks::ValidateEmbeddedSamplersCount(uint32_t new_sampler_count, const
                              "contains %" PRIu32 " embedded samplers, but on this VkDevice there are currently %" PRIu32
                              " embedded samplers in pipelines and shaders, and this will now exceed "
                              "maxDescriptorHeapEmbeddedSamplers (%" PRIu32 ")",
-                             new_sampler_count, embedded_sampler_count,
+                             new_sampler_count, embedded_sampler_count - new_sampler_count,
                              phys_dev_ext_props.descriptor_heap_props.maxDescriptorHeapEmbeddedSamplers);
         }
     }

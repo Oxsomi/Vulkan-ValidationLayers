@@ -63,8 +63,10 @@ void TraceRaysIndirect(Validator& gpuav, const Location& loc, CommandBufferSubSt
         return;
     }
     // TODO https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/12657
-    if (last_bound.GetDescriptorMode() == vvl::DescriptorModeBuffer || last_bound.GetDescriptorMode() == vvl::DescriptorModeHeap) {
-        return;
+    for (const auto& lb : cb_state.base.lastBound) {
+        if (lb.GetDescriptorMode() == vvl::DescriptorModeBuffer) {
+            return;
+        }
     }
 
     valpipe::RestorablePipelineState restorable_state(cb_state, VK_PIPELINE_BIND_POINT_COMPUTE);
@@ -73,8 +75,8 @@ void TraceRaysIndirect(Validator& gpuav, const Location& loc, CommandBufferSubSt
         gpuav.shared_resources_cache.GetOrCreate<ValidationCommandsGpuavState>(gpuav, loc);
     valpipe::ComputePipeline<TraceRaysValidationShader>& validation_pipeline =
         gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<TraceRaysValidationShader>>(
-            gpuav, loc, val_cmd_gpuav_state.error_logging_desc_set_layout_);
-    if (!validation_pipeline.valid) {
+            gpuav, loc, val_cmd_gpuav_state.desc_set_mode.error_logging_desc_set_layout_);
+    if (!validation_pipeline.Valid()) {
         gpuav.InternalError(cb_state.VkHandle(), loc, "Failed to create TraceRaysValidationShader.");
         return;
     }
@@ -103,17 +105,16 @@ void TraceRaysIndirect(Validator& gpuav, const Location& loc, CommandBufferSubSt
         shader_resources.push_constants.max_ray_dispatch_invocation_count =
             gpuav.phys_dev_ext_props.ray_tracing_props_khr.maxRayDispatchInvocationCount;
 
-        if (!BindShaderResources(validation_pipeline, gpuav, cb_state, cb_state.compute_index, cb_state.GetErrorLoggerIndex(),
-                                 shader_resources)) {
-            gpuav.InternalError(cb_state.VkHandle(), loc, "Failed to GetManagedDescriptorSet in BindShaderResources");
-            return;
-        }
+        ASSERT_AND_RETURN(validation_pipeline.BindShaderResources(
+            gpuav, cb_state, shader_resources, valpipe::ErrorLogging{cb_state.compute_index, cb_state.GetErrorLoggerIndex()}));
     }
 
     // Setup validation pipeline
     // ---
     {
-        DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, validation_pipeline.pipeline);
+        if (!validation_pipeline.BindComputePipeline(gpuav, cb_state)) {
+            return;
+        }
 
         DispatchCmdDispatch(cb_state.VkHandle(), 1, 1, 1);
     }
@@ -325,7 +326,8 @@ class DummyBLAS {
         blas_address = DispatchGetAccelerationStructureDeviceAddressKHR(gpuav.device, &addr_info);
 
         cb_state.on_pre_cb_submission_functions.emplace_back(
-            [this](Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_submission_cb) {
+            [this](Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_submission_cb, gpuav::QueueSubmission&,
+                   gpuav::CommandBufferSubmitInfo&) {
                 VkAccelerationStructureBuildRangeInfoKHR triangle_build_range{};
                 triangle_build_range.primitiveCount = 1;
                 triangle_build_range.primitiveOffset = 0;
@@ -380,8 +382,10 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
         return;
     }
     // TODO https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/12657
-    if (last_bound.GetDescriptorMode() == vvl::DescriptorModeBuffer || last_bound.GetDescriptorMode() == vvl::DescriptorModeHeap) {
-        return;
+    for (const auto& lb : cb_state.base.lastBound) {
+        if (lb.GetDescriptorMode() == vvl::DescriptorModeBuffer) {
+            return;
+        }
     }
 
     struct TlasBuild {
@@ -438,8 +442,8 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
         gpuav.shared_resources_cache.GetOrCreate<ValidationCommandsGpuavState>(gpuav, loc);
     valpipe::ComputePipeline<BuildAccelerationStructuresValidationShader>& validation_pipeline =
         gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<BuildAccelerationStructuresValidationShader>>(
-            gpuav, loc, val_cmd_gpuav_state.error_logging_desc_set_layout_);
-    if (!validation_pipeline.valid) {
+            gpuav, loc, val_cmd_gpuav_state.desc_set_mode.error_logging_desc_set_layout_);
+    if (!validation_pipeline.Valid()) {
         return;
     }
 
@@ -447,13 +451,14 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
         cb_state.gpu_resources_manager.GetDeviceLocalBufferRange(sizeof(shader::AccelerationStructureArraysPtr));
 
     cb_state.on_pre_cb_submission_functions.emplace_back(
-        [as_arrays_ptr_buffer](Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_submission_cb) {
+        [as_arrays_ptr_buffer](Validator& gpuav, CommandBufferSubState& cb, VkCommandBuffer per_submission_cb,
+                               gpuav::QueueSubmission& queue_submission, gpuav::CommandBufferSubmitInfo& cb_submit_info) {
             VVL_ZoneScopedN("validate_as_builds_pre_submit");
 
             ReadLockGuard lock(gpuav.device_state->as_with_addresses.array_mutex);
 
             // valid AS addresses buffer
-            vko::BufferRange as_addresses_buffer = cb.gpu_resources_manager.GetHostCoherentBufferRange(
+            vko::BufferRange as_addresses_buffer = queue_submission.resources_manager->GetHostCoherentBufferRange(
                 2 * sizeof(uint32_t) + gpuav.device_state->as_with_addresses.array.size() * sizeof(uint64_t));
             auto accel_struct_addresses_buffer_u32_ptr = (uint32_t*)as_addresses_buffer.offset_mapped_ptr;
 
@@ -462,17 +467,17 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
             auto as_addresses_ptr = (uint64_t*)(accel_struct_addresses_buffer_u32_ptr + 2);
 
             // valid AS CPU submit state buffer
-            vko::BufferRange as_cpu_submit_state_buffer = cb.gpu_resources_manager.GetHostCachedBufferRange(
+            vko::BufferRange as_cpu_submit_state_buffer = queue_submission.resources_manager->GetHostCachedBufferRange(
                 gpuav.device_state->as_with_addresses.array.size() * sizeof(uint32_t));
             auto as_cpu_submit_state_ptr = (uint32_t*)as_cpu_submit_state_buffer.offset_mapped_ptr;
 
             // valid AS GPU state
-            vko::BufferRange as_gpu_state_buffer = cb.gpu_resources_manager.GetHostCachedBufferRange(
+            vko::BufferRange as_gpu_state_buffer = queue_submission.resources_manager->GetHostCachedBufferRange(
                 gpuav.device_state->as_with_addresses.array.size() * sizeof(shader::AsGpuStatePtr));
             auto as_gpu_state_ptr = (shader::AsGpuStatePtr*)as_gpu_state_buffer.offset_mapped_ptr;
 
             // valid AS buffer address ranges buffer
-            vko::BufferRange as_buffer_addr_ranges_buffer = cb.gpu_resources_manager.GetHostCoherentBufferRange(
+            vko::BufferRange as_buffer_addr_ranges_buffer = queue_submission.resources_manager->GetHostCoherentBufferRange(
                 gpuav.device_state->as_with_addresses.array.size() * (2 * sizeof(uint64_t)));
             auto as_buffer_addr_ranges_ptr = (uint64_t*)(as_buffer_addr_ranges_buffer.offset_mapped_ptr);
 
@@ -500,12 +505,12 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
             }
 
             // Host cached memory is not guaranteed to be host coherent, flush so the GPU sees the writes above
-            cb.gpu_resources_manager.FlushAllocation(as_cpu_submit_state_buffer);
-            cb.gpu_resources_manager.FlushAllocation(as_gpu_state_buffer);
+            queue_submission.resources_manager->FlushAllocation(as_cpu_submit_state_buffer);
+            queue_submission.resources_manager->FlushAllocation(as_gpu_state_buffer);
 
             // Fill a GPU buffer with a pointer to the AS metadata
             vko::BufferRange submit_time_ptr_to_accel_structs_state_buffer =
-                cb.gpu_resources_manager.GetHostCoherentBufferRange(sizeof(shader::AccelerationStructureArraysPtr));
+                queue_submission.resources_manager->GetHostCoherentBufferRange(sizeof(shader::AccelerationStructureArraysPtr));
             auto submit_time_ptr_to_accel_structs_state_buffer_ptr =
                 (shader::AccelerationStructureArraysPtr*)submit_time_ptr_to_accel_structs_state_buffer.offset_mapped_ptr;
 
@@ -550,7 +555,9 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
         shader_resources.push_constants.blas_built_in_cmd_array_ptr = (shader::Range*)blas_built_in_cmd_buffer.offset_address;
         shader_resources.push_constants.blas_built_in_cmd_array_size = (uint32_t)blas_built_in_cmd_array.size();
 
-        DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, validation_pipeline.pipeline);
+        if (!validation_pipeline.BindComputePipeline(gpuav, cb_state)) {
+            return;
+        }
 
         // Validation dispatch, one for each TLAS build
         // ---
@@ -587,9 +594,8 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
             shader_resources.push_constants.is_array_of_pointers = is_array_of_pointers;
             shader_resources.push_constants.tlas_build_i = (uint32_t)tlas_build_i;
 
-            const bool bind_error_logging_desc_set = tlas_build_i == 0;
-            ASSERT_AND_RETURN(BindShaderResources(validation_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                  cb_state.GetErrorLoggerIndex(), shader_resources, bind_error_logging_desc_set));
+            ASSERT_AND_RETURN(validation_pipeline.BindShaderResources(
+                gpuav, cb_state, shader_resources, valpipe::ErrorLogging{cb_state.compute_index, cb_state.GetErrorLoggerIndex()}));
 
             constexpr uint32_t wg_size_x = shader::tlas_validation_shader_wg_x;
             constexpr uint32_t wg_size_y = shader::tlas_validation_shader_wg_y;
@@ -600,7 +606,7 @@ void TLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
 
             shader_resources.push_constants.validation_mode = shader::kBuildASValidationMode_memory_overlaps;
 
-            BindShaderPushConstants(validation_pipeline, gpuav, cb_state, shader_resources);
+            validation_pipeline.BindPushConstants(gpuav, cb_state, shader_resources);
 
             const uint32_t wg_count_y = GetDispatchWorkGroupCount((uint32_t)blas_built_in_cmd_array.size(), wg_size_y);
             DispatchCmdDispatch(cb_state.VkHandle(), wg_count_x, wg_count_y, 1);
@@ -857,7 +863,7 @@ static VkDeviceAddress GetAccelerationStructureGeometryGPU(
                         valpipe::ComputePipeline<MemcpyShader>& memcpy_pipeline =
                             gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<MemcpyShader>>(
                                 gpuav, Location(vvl::Func::Empty), VK_NULL_HANDLE);
-                        ASSERT_AND_RETURN_VALUE(memcpy_pipeline.valid, 0);
+                        ASSERT_AND_RETURN_VALUE(memcpy_pipeline.Valid(), 0);
 
                         MemcpyShader memcpy_shader_resources;
                         memcpy_shader_resources.push_constants.update_time_indices = index_buffer_addr;
@@ -875,11 +881,8 @@ static VkDeviceAddress GetAccelerationStructureGeometryGPU(
 
                         assert(index_buffer_bytes_leftover == 0);  // Indices cannot be uint8, so no bytes should be left
 
-                        DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, memcpy_pipeline.pipeline);
-
-                        ASSERT_AND_RETURN_VALUE(BindShaderResources(memcpy_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                                    cb_state.GetErrorLoggerIndex(), memcpy_shader_resources, false),
-                                                0);
+                        ASSERT_AND_RETURN_VALUE(memcpy_pipeline.BindComputePipeline(gpuav, cb_state), 0);
+                        ASSERT_AND_RETURN_VALUE(memcpy_pipeline.BindShaderResources(gpuav, cb_state, memcpy_shader_resources), 0);
 
                         const uint32_t shader_threads_count = memcpy_shader_resources.push_constants.uvec4_count +
                                                               memcpy_shader_resources.push_constants.u32_count +
@@ -910,7 +913,7 @@ static VkDeviceAddress GetAccelerationStructureGeometryGPU(
                         valpipe::ComputePipeline<CopyGeometriesXComponentShader>& copy_geometries_x_pipeline =
                             gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<CopyGeometriesXComponentShader>>(
                                 gpuav, Location(vvl::Func::Empty), VK_NULL_HANDLE);
-                        ASSERT_AND_RETURN_VALUE(copy_geometries_x_pipeline.valid, 0);
+                        ASSERT_AND_RETURN_VALUE(copy_geometries_x_pipeline.Valid(), 0);
 
                         CopyGeometriesXComponentShader copy_geometries_x_resources;
                         copy_geometries_x_resources.push_constants.geometries_x_component_copy =
@@ -919,13 +922,9 @@ static VkDeviceAddress GetAccelerationStructureGeometryGPU(
                         copy_geometries_x_resources.push_constants.count = uint32_t(vertex_count);
                         copy_geometries_x_resources.push_constants.stride = uint32_t(triangles.vertexStride);
 
-                        DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE,
-                                                copy_geometries_x_pipeline.pipeline);
-
+                        ASSERT_AND_RETURN_VALUE(copy_geometries_x_pipeline.BindComputePipeline(gpuav, cb_state), 0);
                         ASSERT_AND_RETURN_VALUE(
-                            BindShaderResources(copy_geometries_x_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                cb_state.GetErrorLoggerIndex(), copy_geometries_x_resources, false),
-                            0);
+                            copy_geometries_x_pipeline.BindShaderResources(gpuav, cb_state, copy_geometries_x_resources), 0);
 
                         const uint32_t shader_threads_count = copy_geometries_x_resources.push_constants.count;
                         const uint32_t wg_count_x =
@@ -963,7 +962,7 @@ static VkDeviceAddress GetAccelerationStructureGeometryGPU(
                     valpipe::ComputePipeline<CopyGeometriesXComponentShader>& copy_geometries_x_pipeline =
                         gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<CopyGeometriesXComponentShader>>(
                             gpuav, Location(vvl::Func::Empty), VK_NULL_HANDLE);
-                    ASSERT_AND_RETURN_VALUE(copy_geometries_x_pipeline.valid, 0);
+                    ASSERT_AND_RETURN_VALUE(copy_geometries_x_pipeline.Valid(), 0);
 
                     CopyGeometriesXComponentShader copy_geometries_x_resources;
                     copy_geometries_x_resources.push_constants.geometries_x_component_copy =
@@ -972,12 +971,9 @@ static VkDeviceAddress GetAccelerationStructureGeometryGPU(
                     copy_geometries_x_resources.push_constants.count = build_range_info.primitiveCount;
                     copy_geometries_x_resources.push_constants.stride = uint32_t(aabb.stride);
 
-                    DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE,
-                                            copy_geometries_x_pipeline.pipeline);
-
-                    ASSERT_AND_RETURN_VALUE(BindShaderResources(copy_geometries_x_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                                cb_state.GetErrorLoggerIndex(), copy_geometries_x_resources, false),
-                                            0);
+                    ASSERT_AND_RETURN_VALUE(copy_geometries_x_pipeline.BindComputePipeline(gpuav, cb_state), 0);
+                    ASSERT_AND_RETURN_VALUE(
+                        copy_geometries_x_pipeline.BindShaderResources(gpuav, cb_state, copy_geometries_x_resources), 0);
 
                     const uint32_t shader_threads_count = copy_geometries_x_resources.push_constants.count;
                     const uint32_t wg_count_x =
@@ -1015,8 +1011,10 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
         return;
     }
     // TODO https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/12657
-    if (last_bound.GetDescriptorMode() == vvl::DescriptorModeBuffer || last_bound.GetDescriptorMode() == vvl::DescriptorModeHeap) {
-        return;
+    for (const auto& lb : cb_state.base.lastBound) {
+        if (lb.GetDescriptorMode() == vvl::DescriptorModeBuffer) {
+            return;
+        }
     }
 
     valpipe::RestorablePipelineState restorable_state(cb_state, VK_PIPELINE_BIND_POINT_COMPUTE);
@@ -1026,16 +1024,18 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
 
     valpipe::ComputePipeline<BLASValidationShader>& blas_pipeline =
         gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<BLASValidationShader>>(
-            gpuav, loc, val_cmd_gpuav_state.error_logging_desc_set_layout_);
-    if (!blas_pipeline.valid) {
+            gpuav, loc, val_cmd_gpuav_state.desc_set_mode.error_logging_desc_set_layout_);
+    if (!blas_pipeline.Valid()) {
         return;
     }
 
-    valpipe::ComputePipeline<MemcmpShader>& memcmp_pipeline =
-        gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<MemcmpShader>>(
-            gpuav, loc, val_cmd_gpuav_state.error_logging_desc_set_layout_);
-    if (!memcmp_pipeline.valid) {
-        return;
+    valpipe::ComputePipeline<MemcmpShader>* memcmp_pipeline = nullptr;
+    if (gpuav.gpuav_settings.ray_tracing_buffers_consistency) {
+        memcmp_pipeline = &gpuav.shared_resources_cache.GetOrCreate<valpipe::ComputePipeline<MemcmpShader>>(
+            gpuav, loc, val_cmd_gpuav_state.desc_set_mode.error_logging_desc_set_layout_);
+        if (!memcmp_pipeline->Valid()) {
+            return;
+        }
     }
 
     struct ErrorInfo {
@@ -1095,7 +1095,7 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
                 continue;
             }
 
-            DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, blas_pipeline.pipeline);
+            ASSERT_AND_RETURN(blas_pipeline.BindComputePipeline(gpuav, cb_state));
 
             BLASValidationShader blas_shader_resources{};
             blas_shader_resources.push_constants.as_geometry_gpu = (shader::AccelerationStructureGeometryGPU*)as_geometry_gpu;
@@ -1127,8 +1127,9 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
                     triangles_validation_mode.has_value()) {
                     blas_shader_resources.push_constants.validation_mode = *triangles_validation_mode;
 
-                    ASSERT_AND_RETURN(BindShaderResources(blas_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                          cb_state.GetErrorLoggerIndex(), blas_shader_resources));
+                    ASSERT_AND_RETURN(blas_pipeline.BindShaderResources(
+                        gpuav, cb_state, blas_shader_resources,
+                        valpipe::ErrorLogging{cb_state.compute_index, cb_state.GetErrorLoggerIndex()}));
 
                     const uint32_t wg_count_x =
                         GetDispatchWorkGroupCount(3 * build_range_info.primitiveCount, shader::blas_validation_shader_wg_x);
@@ -1137,8 +1138,9 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
 
                 if (geom_data.geometry.triangles.transformData.deviceAddress != 0) {
                     blas_shader_resources.push_constants.validation_mode = shader::kBLASValidationMode_transform_matrix;
-                    ASSERT_AND_RETURN(BindShaderResources(blas_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                          cb_state.GetErrorLoggerIndex(), blas_shader_resources));
+                    ASSERT_AND_RETURN(blas_pipeline.BindShaderResources(
+                        gpuav, cb_state, blas_shader_resources,
+                        valpipe::ErrorLogging{cb_state.compute_index, cb_state.GetErrorLoggerIndex()}));
 
                     DispatchCmdDispatch(cb_state.VkHandle(), 1, 1, 1);
                 }
@@ -1149,8 +1151,9 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
                     !(info.flags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR)) {
                     blas_shader_resources.push_constants.last_build_as_geometries_gpu = nullptr;
                 }
-                ASSERT_AND_RETURN(BindShaderResources(blas_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                      cb_state.GetErrorLoggerIndex(), blas_shader_resources));
+                ASSERT_AND_RETURN(blas_pipeline.BindShaderResources(
+                    gpuav, cb_state, blas_shader_resources,
+                    valpipe::ErrorLogging{cb_state.compute_index, cb_state.GetErrorLoggerIndex()}));
 
                 const uint32_t wg_count_x =
                     GetDispatchWorkGroupCount(build_range_info.primitiveCount, shader::blas_validation_shader_wg_x);
@@ -1183,10 +1186,10 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
                 memcmp_shader_resources.push_constants.geometry_i = geom_i;
                 memcmp_shader_resources.push_constants.error_info_i = error_info_i;
 
-                DispatchCmdBindPipeline(cb_state.VkHandle(), VK_PIPELINE_BIND_POINT_COMPUTE, memcmp_pipeline.pipeline);
-
-                ASSERT_AND_RETURN(BindShaderResources(memcmp_pipeline, gpuav, cb_state, cb_state.compute_index,
-                                                      cb_state.GetErrorLoggerIndex(), memcmp_shader_resources));
+                ASSERT_AND_RETURN(memcmp_pipeline->BindComputePipeline(gpuav, cb_state));
+                ASSERT_AND_RETURN(memcmp_pipeline->BindShaderResources(
+                    gpuav, cb_state, memcmp_shader_resources,
+                    valpipe::ErrorLogging{cb_state.compute_index, cb_state.GetErrorLoggerIndex()}));
 
                 const uint32_t shader_threads_count = memcmp_shader_resources.push_constants.uvec4_count +
                                                       memcmp_shader_resources.push_constants.u32_count +
@@ -1207,46 +1210,48 @@ void BLAS(Validator& gpuav, const Location& loc, CommandBufferSubState& cb_state
         // Record GPU AS state updates commands
         // ---
 
-        const VkDeviceSize as_geometries_buffer_size =
-            2 * sizeof(uint32_t) + info.geometryCount * sizeof(shader::AccelerationStructureGeometryGPU);
-        if (info.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR) {
-            const vko::BufferRange& as_geometries_dst_as_buffer_range = dst_as_gpu_buffers.buffers.build_cmd_copy;
-            ASSERT_AND_CONTINUE(as_geometries_cb_gpu_buffer.size >= as_geometries_buffer_size);
-            ASSERT_AND_CONTINUE(as_geometries_dst_as_buffer_range.Valid() &&
-                                as_geometries_dst_as_buffer_range.size >= as_geometries_buffer_size);
+        if (gpuav.gpuav_settings.ray_tracing_buffers_consistency) {
+            const VkDeviceSize as_geometries_buffer_size =
+                2 * sizeof(uint32_t) + info.geometryCount * sizeof(shader::AccelerationStructureGeometryGPU);
+            if (info.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR) {
+                const vko::BufferRange& as_geometries_dst_as_buffer_range = dst_as_gpu_buffers.buffers.build_cmd_copy;
+                ASSERT_AND_CONTINUE(as_geometries_cb_gpu_buffer.size >= as_geometries_buffer_size);
+                ASSERT_AND_CONTINUE(as_geometries_dst_as_buffer_range.Valid() &&
+                                    as_geometries_dst_as_buffer_range.size >= as_geometries_buffer_size);
 
-            // Deferred so that the copy is recorded *after* the build command it snapshots.
-            cb_state.on_post_call_record_cmd_build_as_functions.emplace_back(
-                [as_geometries_cb_buffer = as_geometries_cb_gpu_buffer.buffer,
-                 as_geometries_cb_buffer_offset = as_geometries_cb_gpu_buffer.offset,
-                 as_geometries_dst_as_buffer = as_geometries_dst_as_buffer_range.buffer,
-                 as_geometries_dst_as_buffer_offset = as_geometries_dst_as_buffer_range.offset, as_geometries_buffer_size,
+                // Deferred so that the copy is recorded *after* the build command it snapshots.
+                cb_state.on_post_call_record_cmd_build_as_functions.emplace_back(
+                    [as_geometries_cb_buffer = as_geometries_cb_gpu_buffer.buffer,
+                     as_geometries_cb_buffer_offset = as_geometries_cb_gpu_buffer.offset,
+                     as_geometries_dst_as_buffer = as_geometries_dst_as_buffer_range.buffer,
+                     as_geometries_dst_as_buffer_offset = as_geometries_dst_as_buffer_range.offset, as_geometries_buffer_size,
 
-                 dst_as_last_build_cmd_ptr_buffer = dst_as_gpuav_state.last_build_cmd_ptr.buffer,
-                 dst_as_last_build_cmd_ptr_offset = dst_as_gpuav_state.last_build_cmd_ptr.offset,
-                 as_geometries_dst_as_buffer_address = as_geometries_dst_as_buffer_range.offset_address
+                     dst_as_last_build_cmd_ptr_buffer = dst_as_gpuav_state.last_build_cmd_ptr.buffer,
+                     dst_as_last_build_cmd_ptr_offset = dst_as_gpuav_state.last_build_cmd_ptr.offset,
+                     as_geometries_dst_as_buffer_address = as_geometries_dst_as_buffer_range.offset_address
 
-            ](Validator&, CommandBufferSubState& cb) {
-                    VkMemoryBarrier barrier = vku::InitStructHelper();
-                    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    DispatchCmdPipelineBarrier(cb.VkHandle(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                               0, 1, &barrier, 0, nullptr, 0, nullptr);
+                ](Validator&, CommandBufferSubState& cb) {
+                        VkMemoryBarrier barrier = vku::InitStructHelper();
+                        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                        DispatchCmdPipelineBarrier(cb.VkHandle(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                                   VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 
-                    VkBufferCopy region{};
-                    region.srcOffset = as_geometries_cb_buffer_offset;
-                    region.dstOffset = as_geometries_dst_as_buffer_offset;
-                    region.size = as_geometries_buffer_size;
-                    DispatchCmdCopyBuffer(cb.VkHandle(), as_geometries_cb_buffer, as_geometries_dst_as_buffer, 1, &region);
+                        VkBufferCopy region{};
+                        region.srcOffset = as_geometries_cb_buffer_offset;
+                        region.dstOffset = as_geometries_dst_as_buffer_offset;
+                        region.size = as_geometries_buffer_size;
+                        DispatchCmdCopyBuffer(cb.VkHandle(), as_geometries_cb_buffer, as_geometries_dst_as_buffer, 1, &region);
 
-                    DispatchCmdUpdateBuffer(cb.VkHandle(), dst_as_last_build_cmd_ptr_buffer, dst_as_last_build_cmd_ptr_offset,
-                                            sizeof(VkDeviceAddress), &as_geometries_dst_as_buffer_address);
+                        DispatchCmdUpdateBuffer(cb.VkHandle(), dst_as_last_build_cmd_ptr_buffer, dst_as_last_build_cmd_ptr_offset,
+                                                sizeof(VkDeviceAddress), &as_geometries_dst_as_buffer_address);
 
-                    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                    DispatchCmdPipelineBarrier(cb.VkHandle(), VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                               0, 1, &barrier, 0, nullptr, 0, nullptr);
-                });
+                        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                        DispatchCmdPipelineBarrier(cb.VkHandle(), VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+                    });
+            }
         }
     }
 

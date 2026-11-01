@@ -536,6 +536,8 @@ enum class Feature {
     streamingPerfCounters,
     // VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT
     graphicsPipelineLibrary,
+    // VkPhysicalDeviceHdrSmpteSt209450FeaturesGOOGLE
+    hdrSmpteSt209450,
     // VkPhysicalDeviceHdrVividFeaturesHUAWEI
     hdrVivid,
     // VkPhysicalDeviceHostImageCopyFeatures, VkPhysicalDeviceVulkan14Features
@@ -610,6 +612,8 @@ enum class Feature {
     maintenance10,
     // VkPhysicalDeviceMaintenance11FeaturesKHR
     maintenance11,
+    // VkPhysicalDeviceMaintenance12FeaturesKHR
+    maintenance12,
     // VkPhysicalDeviceMaintenance4Features, VkPhysicalDeviceVulkan13Features
     maintenance4,
     // VkPhysicalDeviceMaintenance5Features, VkPhysicalDeviceVulkan14Features

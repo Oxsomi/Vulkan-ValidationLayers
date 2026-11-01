@@ -497,7 +497,8 @@ bool CoreChecks::ValidateGeneratedCommandsShaderInfo(const LogObjectList objlist
     return skip;
 }
 
-bool CoreChecks::ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_state,
+// |state_cb_state| is stateCommandBuffer for vkCmdPreprocessGeneratedCommandsEXT
+bool CoreChecks::ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_state, const vvl::CommandBuffer& state_cb_state,
                                                const vvl::IndirectCommandsLayout& indirect_commands_layout,
                                                const VkGeneratedCommandsInfoEXT& generated_commands_info, bool preprocessed,
                                                const Location& info_loc) const {
@@ -505,9 +506,9 @@ bool CoreChecks::ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_stat
 
     if (indirect_commands_layout.has_vertex_buffer_token) {
         // If had vertex buffer token, it had to be graphic bind point (else would hit error earlier)
-        const auto pipeline = cb_state.GetLastBoundGraphics().pipeline_state;
+        const auto pipeline = state_cb_state.GetLastBoundGraphics().pipeline_state;
         if (pipeline && !pipeline->IsDynamic(CB_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE)) {
-            const LogObjectList objlist(cb_state.Handle(), pipeline->Handle());
+            const LogObjectList objlist(cb_state.Handle(), state_cb_state.Handle(), pipeline->Handle());
             skip |= LogError("VUID-VkGeneratedCommandsInfoEXT-indirectCommandsLayout-11079", objlist,
                              info_loc.dot(Field::indirectCommandsLayout),
                              "contains a VK_INDIRECT_COMMANDS_TOKEN_TYPE_VERTEX_BUFFER_EXT token but the last bound graphics "
@@ -520,10 +521,10 @@ bool CoreChecks::ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_stat
         const uint64_t limit = 1ULL << 24;
         const uint64_t count = (uint64_t)generated_commands_info.maxDrawCount * (uint64_t)generated_commands_info.maxSequenceCount;
         if (count >= limit) {
-            skip |= LogError(
-                "VUID-VkGeneratedCommandsInfoEXT-maxDrawCount-11078", cb_state.Handle(), info_loc.dot(Field::maxDrawCount),
-                "(%" PRIu32 ") times maxSequenceCount (%" PRIu32 ") is %" PRIu64 " which is over the limit of 2^24 (16777216)",
-                generated_commands_info.maxDrawCount, generated_commands_info.maxSequenceCount, count);
+            skip |=
+                LogError("VUID-VkGeneratedCommandsInfoEXT-maxDrawCount-11078", cb_state.Handle(), info_loc.dot(Field::maxDrawCount),
+                         "(%" PRIu32 ") times maxSequenceCount (%" PRIu32 ") is %" PRIu64 " which is not less than 2^24 (16777216)",
+                         generated_commands_info.maxDrawCount, generated_commands_info.maxSequenceCount, count);
         }
     }
 
@@ -618,15 +619,16 @@ bool CoreChecks::ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_stat
     }
 
     // Only dispatch if we know this is valid
+    VkMemoryRequirements2 mem_reqs = vku::InitStructHelper();
     if (valid_dispatch) {
         VkGeneratedCommandsMemoryRequirementsInfoEXT req_info = vku::InitStructHelper();
         req_info.maxSequenceCount = generated_commands_info.maxSequenceCount;
+        req_info.maxDrawCount = generated_commands_info.maxDrawCount;
         req_info.indirectCommandsLayout = generated_commands_info.indirectCommandsLayout;
         req_info.indirectExecutionSet = generated_commands_info.indirectExecutionSet;
         if (generated_commands_info.indirectExecutionSet == VK_NULL_HANDLE) {
             req_info.pNext = pipeline_info ? (void*)pipeline_info : (void*)shader_info;
         }
-        VkMemoryRequirements2 mem_reqs = vku::InitStructHelper();
         DispatchGetGeneratedCommandsMemoryRequirementsEXT(device, &req_info, &mem_reqs);
 
         if (generated_commands_info.preprocessAddress == 0 && mem_reqs.memoryRequirements.size != 0) {
@@ -651,13 +653,29 @@ bool CoreChecks::ValidateGeneratedCommandsInfo(const vvl::CommandBuffer& cb_stat
     }
 
     {
-        BufferAddressValidation<1> buffer_address_validator = {
+        // A size of zero means no preprocess memory is needed (and memoryTypeBits might not be filled in)
+        const uint32_t memory_type_bits =
+            (mem_reqs.memoryRequirements.size != 0) ? mem_reqs.memoryRequirements.memoryTypeBits : vvl::kU32Max;
+        BufferAddressValidation<2> buffer_address_validator = {
             {{{"VUID-VkGeneratedCommandsInfoEXT-preprocessAddress-11069",
                [](const vvl::Buffer& buffer_state) {
                    return (buffer_state.usage & VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT) == 0;
                },
                []() { return "The following buffers are missing VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT"; },
-               ErrorMsgBuffer::Usage}}}};
+               ErrorMsgBuffer::Usage},
+              {"VUID-VkGeneratedCommandsInfoEXT-preprocessAddress-11064",
+               [memory_type_bits](const vvl::Buffer& buffer_state) {
+                   const auto memory_state = buffer_state.MemoryState();
+                   return memory_state && !memory_state->Destroyed() &&
+                          ((1u << memory_state->allocate_info.memoryTypeIndex) & memory_type_bits) == 0;
+               },
+               [memory_type_bits]() {
+                   std::stringstream ss;
+                   ss << "The following buffers are bound to memory with a memoryTypeIndex not allowed by the memoryTypeBits (0x"
+                      << std::hex << memory_type_bits << ") returned by vkGetGeneratedCommandsMemoryRequirementsEXT";
+                   return ss.str();
+               },
+               ErrorMsgBuffer::MemoryType}}}};
 
         skip |= buffer_address_validator.ValidateDeviceAddress(*this, info_loc.dot(Field::preprocessAddress),
                                                                LogObjectList(cb_state.Handle()),
@@ -770,9 +788,30 @@ bool CoreChecks::PreCallValidateCmdExecuteGeneratedCommandsEXT(VkCommandBuffer c
     if (indirect_commands_layout->has_draw_token) {
         skip |=
             OutsideRenderPass(cb_state, error_obj.location, "VUID-vkCmdExecuteGeneratedCommandsEXT-indirectCommandsLayout-10769");
+
+        // VUID being added in https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8653
+        if (bound_stages != 0) {
+            const VkShaderStageFlags mesh_stages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
+            if (indirect_commands_layout->has_mesh_draw_token && (bound_stages & VK_SHADER_STAGE_MESH_BIT_EXT) == 0) {
+                skip |=
+                    LogError("UNASSIGNED-vkCmdExecuteGeneratedCommandsEXT-MeshDrawToken",
+                             cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), info_loc.dot(Field::indirectCommandsLayout),
+                             "contains a VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_* token, but no mesh shader is bound\n"
+                             "bound shader stages are: %s",
+                             string_VkShaderStageFlags(bound_stages).c_str());
+            } else if (!indirect_commands_layout->has_mesh_draw_token && (bound_stages & mesh_stages) != 0) {
+                skip |=
+                    LogError("UNASSIGNED-vkCmdExecuteGeneratedCommandsEXT-NonMeshDrawToken",
+                             cb_state.GetObjectList(VK_PIPELINE_BIND_POINT_GRAPHICS), info_loc.dot(Field::indirectCommandsLayout),
+                             "contains a non-mesh draw token, but a task or mesh shader is bound (bound shader stages are "
+                             "%s).\nHint: Use a VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_* token instead.",
+                             string_VkShaderStageFlags(bound_stages).c_str());
+            }
+        }
     }
 
-    skip |= ValidateGeneratedCommandsInfo(cb_state, *indirect_commands_layout, *pGeneratedCommandsInfo, isPreprocessed, info_loc);
+    skip |= ValidateGeneratedCommandsInfo(cb_state, cb_state, *indirect_commands_layout, *pGeneratedCommandsInfo, isPreprocessed,
+                                          info_loc);
 
     // You can only have 1 "action token" so we know there is only a draw or dispatch or traceRay
     // If a VkIndirectExecutionSetEXT is not used, we can guarantee the pipeline/shaderObject being used.
@@ -886,7 +925,8 @@ bool CoreChecks::PreCallValidateCmdPreprocessGeneratedCommandsEXT(VkCommandBuffe
     skip |= ValidatePreprocessGeneratedCommandsStateCommandBuffer(cb_state, *state_cb_state, *indirect_commands_layout,
                                                                   *pGeneratedCommandsInfo, error_obj.location);
 
-    skip |= ValidateGeneratedCommandsInfo(cb_state, *indirect_commands_layout, *pGeneratedCommandsInfo, false, info_loc);
+    skip |= ValidateGeneratedCommandsInfo(cb_state, *state_cb_state, *indirect_commands_layout, *pGeneratedCommandsInfo, false,
+                                          info_loc);
 
     return skip;
 }
@@ -915,7 +955,7 @@ bool CoreChecks::PreCallValidateGetGeneratedCommandsMemoryRequirementsEXT(VkDevi
         if (count >= limit) {
             skip |= LogError(
                 "VUID-VkGeneratedCommandsMemoryRequirementsInfoEXT-maxDrawCount-11146", device, info_loc.dot(Field::maxDrawCount),
-                "(%" PRIu32 ") times maxSequenceCount (%" PRIu32 ") is %" PRIu64 " which is over the limit of 2^24 (16777216)",
+                "(%" PRIu32 ") times maxSequenceCount (%" PRIu32 ") is %" PRIu64 " which is not less than 2^24 (16777216)",
                 pInfo->maxDrawCount, pInfo->maxSequenceCount, count);
         }
     }

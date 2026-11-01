@@ -2939,6 +2939,68 @@ TEST_F(NegativeWsi, SwapchainMaintenance1ExtensionRelease) {
 }
 
 #if defined(VK_USE_PLATFORM_WIN32_KHR)
+TEST_F(NegativeWsi, FullScreenExclusiveWin32NullHmonitor) {
+    SetTargetApiVersion(VK_API_VERSION_1_2);
+    AddSurfaceExtension();
+    AddRequiredExtensions(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+    AddRequiredExtensions(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
+    RETURN_IF_SKIP(Init());
+
+    if (!IsPlatformMockICD()) {
+        GTEST_SKIP() << "Only run test MockICD due to CI stability";
+    }
+
+    InitRenderTarget();
+    RETURN_IF_SKIP(InitSwapchain());
+
+    VkSurfaceFullScreenExclusiveWin32InfoEXT fullscreen_exclusive_win32_info = vku::InitStructHelper();
+    fullscreen_exclusive_win32_info.hmonitor = NULL;  // Invalid
+    VkSurfaceFullScreenExclusiveInfoEXT fullscreen_exclusive_info = vku::InitStructHelper(&fullscreen_exclusive_win32_info);
+    fullscreen_exclusive_info.fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
+
+    VkPhysicalDeviceSurfaceInfo2KHR surface_info = vku::InitStructHelper(&fullscreen_exclusive_info);
+    surface_info.surface = m_surface;
+
+    VkSurfaceCapabilities2KHR surface_caps = vku::InitStructHelper();
+    m_errorMonitor->SetDesiredError("VUID-VkSurfaceFullScreenExclusiveWin32InfoEXT-hmonitor-02673");
+    vk::GetPhysicalDeviceSurfaceCapabilities2KHR(Gpu(), &surface_info, &surface_caps);
+    m_errorMonitor->VerifyFound();
+
+    uint32_t count = 0;
+    m_errorMonitor->SetDesiredError("VUID-VkSurfaceFullScreenExclusiveWin32InfoEXT-hmonitor-02673");
+    vk::GetPhysicalDeviceSurfaceFormats2KHR(Gpu(), &surface_info, &count, nullptr);
+    m_errorMonitor->VerifyFound();
+
+    m_errorMonitor->SetDesiredError("VUID-VkSurfaceFullScreenExclusiveWin32InfoEXT-hmonitor-02673");
+    vk::GetPhysicalDeviceSurfacePresentModes2EXT(Gpu(), &surface_info, &count, nullptr);
+    m_errorMonitor->VerifyFound();
+
+    VkDeviceGroupPresentModeFlagsKHR modes = 0;
+    m_errorMonitor->SetDesiredError("VUID-VkSurfaceFullScreenExclusiveWin32InfoEXT-hmonitor-02673");
+    vk::GetDeviceGroupSurfacePresentModes2EXT(device(), &surface_info, &modes);
+    m_errorMonitor->VerifyFound();
+
+    VkSwapchainCreateInfoKHR swapchain_create_info = vku::InitStructHelper(&fullscreen_exclusive_info);
+    swapchain_create_info.surface = m_surface;
+    swapchain_create_info.minImageCount = m_surface_capabilities.minImageCount;
+    swapchain_create_info.imageFormat = m_surface_formats[0].format;
+    swapchain_create_info.imageColorSpace = m_surface_formats[0].colorSpace;
+    swapchain_create_info.imageExtent = GetSwapchainExtent(m_surface_capabilities);
+    swapchain_create_info.imageArrayLayers = 1;
+    swapchain_create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    swapchain_create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapchain_create_info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    swapchain_create_info.compositeAlpha = m_surface_composite_alpha;
+    swapchain_create_info.presentMode = m_surface_non_shared_present_mode;
+    swapchain_create_info.clipped = VK_FALSE;
+    swapchain_create_info.oldSwapchain = m_swapchain;
+
+    VkSwapchainKHR swapchain;
+    m_errorMonitor->SetDesiredError("VUID-VkSurfaceFullScreenExclusiveWin32InfoEXT-hmonitor-02673");
+    vk::CreateSwapchainKHR(device(), &swapchain_create_info, nullptr, &swapchain);
+    m_errorMonitor->VerifyFound();
+}
+
 TEST_F(NegativeWsi, AcquireFullScreenExclusiveModeEXT) {
     TEST_DESCRIPTION("Test vkAcquireFullScreenExclusiveModeEXT.");
 
@@ -4259,7 +4321,7 @@ TEST_F(NegativeWsi, MissingPresentModesCreateInfoFifoLatestReadyFeature) {
 
     VkSwapchainCreateInfoKHR swapchain_ci = vku::InitStructHelper(&present_modes_ci);
     swapchain_ci.surface = m_surface;
-    swapchain_ci.minImageCount = m_surface_capabilities.minImageCount;
+    swapchain_ci.minImageCount = surface_caps.surfaceCapabilities.minImageCount;
     swapchain_ci.imageFormat = m_surface_formats[0].format;
     swapchain_ci.imageColorSpace = m_surface_formats[0].colorSpace;
     swapchain_ci.imageExtent = GetSwapchainExtent(m_surface_capabilities);
@@ -4541,9 +4603,7 @@ TEST_F(NegativeWsi, InitSwapchainInvalidImageCount) {
     m_errorMonitor->VerifyFound();
 }
 
-// TODO - https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10112
-// Need to alter test to actually use different native window objects
-TEST_F(NegativeWsi, DISABLED_InitSwapchainInvalidOldSwapchain) {
+TEST_F(NegativeWsi, InitSwapchainInvalidOldSwapchain) {
     TEST_DESCRIPTION("Initialize swapchain with invalid oldSwapchain");
 
     AddSurfaceExtension();
@@ -4575,6 +4635,46 @@ TEST_F(NegativeWsi, DISABLED_InitSwapchainInvalidOldSwapchain) {
 
     m_errorMonitor->SetDesiredError("VUID-VkSwapchainCreateInfoKHR-oldSwapchain-01933");
     vkt::Swapchain swapchain3(*m_device, swapchain_ci);
+    m_errorMonitor->VerifyFound();
+}
+
+TEST_F(NegativeWsi, OldSwapchainFromAnotherNativeWindow) {
+    TEST_DESCRIPTION("https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10112");
+    AddSurfaceExtension();
+    RETURN_IF_SKIP(Init());
+    if (IsPlatformMockICD()) {
+        GTEST_SKIP() << "Will leak in ANSN because headless machine uses xvfb, but can only handle a single surface";
+    }
+    RETURN_IF_SKIP(InitSurface());
+    InitSwapchainInfo();
+
+    VkSurfaceCapabilitiesKHR surface_caps;
+    vk::GetPhysicalDeviceSurfaceCapabilitiesKHR(Gpu(), m_surface, &surface_caps);
+
+    VkSwapchainCreateInfoKHR swapchain_ci = vku::InitStructHelper();
+    swapchain_ci.surface = m_surface;
+    swapchain_ci.minImageCount = surface_caps.minImageCount;
+    swapchain_ci.imageFormat = m_surface_formats[0].format;
+    swapchain_ci.imageColorSpace = m_surface_formats[0].colorSpace;
+    swapchain_ci.imageExtent = GetSwapchainExtent(surface_caps);
+    swapchain_ci.imageArrayLayers = 1u;
+    swapchain_ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    swapchain_ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    swapchain_ci.compositeAlpha = m_surface_composite_alpha;
+    swapchain_ci.presentMode = m_surface_non_shared_present_mode;
+    vkt::Swapchain swapchain1(*m_device, swapchain_ci);
+
+    SurfaceContext surface_context2;
+    vkt::Surface surface2;
+    VkResult result = CreateSurface(surface_context2, surface2);
+    if (result != VK_SUCCESS) {
+        GTEST_SKIP() << "Failed to create surface.";
+    }
+
+    swapchain_ci.oldSwapchain = swapchain1;
+    swapchain_ci.surface = surface2.Handle();
+    m_errorMonitor->SetDesiredError("VUID-VkSwapchainCreateInfoKHR-oldSwapchain-01933");
+    vkt::Swapchain swapchain2(*m_device, swapchain_ci);
     m_errorMonitor->VerifyFound();
 }
 
@@ -4947,33 +5047,48 @@ TEST_F(NegativeWsi, SignalPresentSemaphore) {
     m_default_queue->Wait();
 }
 
-TEST_F(NegativeWsi, SignalPresentSemaphoreAfterQueueWait) {
-    TEST_DESCRIPTION("When swapchain maintenance1 is enabled then waiting on the queue is not enough to reuse swapchain semaphore");
+TEST_F(NegativeWsi, PresentSemaphoreOtherQueueWait) {
+    TEST_DESCRIPTION("Waiting on another queue does not make a present semaphore safe to reuse");
+    all_queue_count_ = true;
     AddSurfaceExtension();
     AddRequiredExtensions(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
     AddRequiredFeature(vkt::Feature::swapchainMaintenance1);
     RETURN_IF_SKIP(Init());
     RETURN_IF_SKIP(InitSwapchain());
-    const auto swapchain_images = m_swapchain.GetImages();
+    if (!m_second_queue || m_second_queue->family_index != m_default_queue->family_index) {
+        GTEST_SKIP() << "Two queues from the same family are required";
+    }
+    VkBool32 supported = VK_FALSE;
+    vk::GetPhysicalDeviceSurfaceSupportKHR(Gpu(), m_second_queue->family_index, m_surface, &supported);
+    if (!supported) {
+        GTEST_SKIP() << "Second queue does not support presentation";
+    }
+    const auto images = m_swapchain.GetImages();
 
-    vkt::Semaphore acquire_semaphore(*m_device);
-    uint32_t image_index = m_swapchain.AcquireNextImage(acquire_semaphore, kWaitTimeout);
+    vkt::Fence acquired_fence(*m_device);
+    const uint32_t first_index = m_swapchain.AcquireNextImage(acquired_fence, kWaitTimeout);
+    acquired_fence.Wait(kWaitTimeout);
+    SetPresentImageLayout(images[first_index]);
+    m_default_queue->Present(m_swapchain, first_index, vkt::no_semaphore);
 
+    vkt::Semaphore acquired(*m_device);
+    const uint32_t index = m_swapchain.AcquireNextImage(acquired, kWaitTimeout);
     m_command_buffer.Begin();
-    m_command_buffer.TransitionLayout(swapchain_images[image_index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    m_command_buffer.TransitionLayout(images[index], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     m_command_buffer.End();
 
-    vkt::Semaphore present_semaphore(*m_device);
-    m_default_queue->Submit(m_command_buffer, vkt::Wait(acquire_semaphore), vkt::Signal(present_semaphore));
-    m_default_queue->Present(m_swapchain, image_index, present_semaphore);
+    // Present on the second queue
+    vkt::Semaphore presented(*m_device);
+    m_second_queue->Submit(m_command_buffer, vkt::Wait(acquired), vkt::Signal(presented));
+    m_second_queue->Present(m_swapchain, index, presented);
 
-    // Workaround with QueueWait is only allowed when maintenance1 is not used.
-    // Swapchain maintenance1 provides official way how to safely delete present semaphores, so it should be used intsead.
+    // but wait only for present from the first queue
     m_default_queue->Wait();
+
     m_errorMonitor->SetDesiredError("VUID-vkQueueSubmit-pSignalSemaphores-00067");
-    m_default_queue->Submit(vkt::no_cmd, vkt::Signal(present_semaphore));
+    m_second_queue->Submit(vkt::no_cmd, vkt::Signal(presented));
     m_errorMonitor->VerifyFound();
-    m_default_queue->Wait();
+    m_second_queue->Wait();
 }
 
 TEST_F(NegativeWsi, PresentId2Features) {
